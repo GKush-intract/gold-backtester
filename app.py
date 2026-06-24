@@ -139,6 +139,9 @@ if run:
 
     with st.expander("Full metrics + config"):
         st.dataframe(summary, use_container_width=True)
+        st.caption("Sharpe/Sortino are annualized from per-bar equity returns (risk-free = 0). "
+                   "On intraday data these are inflated and not comparable to daily Sharpe — "
+                   "treat them as relative, not absolute. SL/TP are first checked the bar after entry.")
         st.json(cfg.__dict__)
         st.download_button("⬇ Download equity curve CSV",
                            ec.to_csv().encode(), file_name="equity_curve.csv", mime="text/csv")

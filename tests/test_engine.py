@@ -108,3 +108,17 @@ def test_equity_zero_stops_run():
     res = run_backtest(cfg, strat, data)
     assert res.stopped_out is True
     assert len(res.equity_curve) < len(data)  # halted before the final bar
+
+
+def test_entry_bar_bracket_not_checked():
+    # Convention: a position fills at a bar's open; its SL/TP are first checked on the NEXT bar.
+    # Entry fills at bar1 open=100 with stop=95. Bar1's own low (90) must NOT stop it out;
+    # the stop fires only on bar2 (low 90 <= 95). bars_held therefore == 1, not 0.
+    data = make_data([(100, 100, 100, 100), (100, 100, 90, 100), (100, 100, 90, 100)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    strat = EnterOnceLong(size=1.0, sl=95, tp=1000)
+    res = run_backtest(cfg, strat, data)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "stop"
+    assert t["exit_price"] == pytest.approx(95.0)
+    assert t["bars_held"] == 1  # exited on the bar AFTER entry, not the entry bar

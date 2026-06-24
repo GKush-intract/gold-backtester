@@ -106,6 +106,7 @@ def _resolve_bracket(pos: Position, o, h, l, cfg: BacktestConfig):
                 tp_hit, tp_base = True, tp
 
     if stop_hit and tp_hit:
+        # With a single bracket, "optimistic" (assume favorable fill) == "tp_first".
         if cfg.intrabar == "tp_first" or cfg.intrabar == "optimistic":
             return ("tp", tp_base)
         return ("stop", stop_base)          # "stop_first" default (pessimistic)

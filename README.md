@@ -58,5 +58,12 @@ class MyStrategy(Strategy):
 - **Sizing/P&L** in units (oz): `pnl = (exit-entry)*size*(±1) - commission`. XAUUSD lot = 100 oz.
 - **Equity vs balance:** `balance` = realized cash; `equity` = balance + unrealized at close;
   drawdown is computed off `equity`. Run stops if `equity <= 0`.
+- **Entry-bar brackets:** a position fills at a bar's open and its SL/TP are first checked on the
+  **next** bar — the entry bar's own high/low cannot stop you out. This avoids ambiguous
+  intra-entry-bar ordering, but for very tight stops it slightly understates stop-outs (optimistic).
+  Pinned by `test_entry_bar_bracket_not_checked`.
+- **Sharpe / Sortino** are annualized from per-bar equity returns (risk-free = 0) using
+  √(periods-per-year). On intraday (e.g. M5) data this multiplier is large and the figures are
+  **inflated / not directly comparable to daily Sharpe** — treat them as relative, not absolute.
 - **v1 limits (TODO):** one position at a time (no pyramiding), single TP (no partials),
   market entries only (no pending limit/stop entries), no margin/leverage modeling.
