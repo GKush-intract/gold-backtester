@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .strategy import Context, Position, Strategy
+from .strategy import Context, Position, Strategy, OZ_PER_LOT, clamp_lots
 
 
 @dataclass
@@ -14,10 +14,11 @@ class BacktestConfig:
     opening_balance: float = 10_000.0
     spread: float = 0.30
     slippage: float = 0.0
-    commission_per_trade: float = 0.0
-    commission_per_unit: float = 0.0
-    intrabar: str = "stop_first"   # "stop_first" | "tp_first" | "optimistic"
-    entry_fill: str = "next_open"  # "next_open" only in v1 (kept for forward-compat)
+    commission_per_trade: float = 0.0   # flat $ per round-trip
+    commission_per_lot: float = 0.0     # $ per lot per round-trip
+    max_leverage: float = 20.0          # cap notional at max_leverage * equity; <=0 = unlimited
+    intrabar: str = "stop_first"        # "stop_first" | "tp_first" | "optimistic"
+    entry_fill: str = "next_open"       # "next_open" only in v1 (kept for forward-compat)
 
 
 @dataclass
@@ -25,7 +26,7 @@ class Trade:
     entry_time: object
     exit_time: object
     direction: str
-    size: float
+    size: float                 # LOTS (1 lot = 100 oz)
     entry_price: float
     exit_price: float
     stop_loss: Optional[float]
@@ -36,6 +37,8 @@ class Trade:
     tag: str
     bars_held: int
     initial_risk: Optional[float]
+    notional: float             # lots * 100 * entry_price ($ face value)
+    leverage: float             # notional / equity at entry
 
 
 @dataclass
@@ -58,13 +61,13 @@ def _sell_fill(base, cfg):
     return base - cfg.spread / 2 - cfg.slippage
 
 
-def _commission(size, cfg):
-    return cfg.commission_per_trade + cfg.commission_per_unit * size
+def _commission(size_lots, cfg):
+    return cfg.commission_per_trade + cfg.commission_per_lot * size_lots
 
 
 def _trade_pnl(pos: Position, exit_fill: float, cfg: BacktestConfig) -> float:
     sign = 1 if pos.direction == "long" else -1
-    gross = (exit_fill - pos.entry_price) * pos.size * sign
+    gross = (exit_fill - pos.entry_price) * pos.size * OZ_PER_LOT * sign
     return gross - _commission(pos.size, cfg)
 
 
@@ -72,7 +75,7 @@ def _unrealized(pos: Optional[Position], price: float) -> float:
     if pos is None:
         return 0.0
     sign = 1 if pos.direction == "long" else -1
-    return (price - pos.entry_price) * pos.size * sign
+    return (price - pos.entry_price) * pos.size * OZ_PER_LOT * sign
 
 
 def _resolve_bracket(pos: Position, o, h, l, cfg: BacktestConfig):
@@ -119,12 +122,14 @@ def _resolve_bracket(pos: Position, o, h, l, cfg: BacktestConfig):
 
 def _make_trade(pos, exit_time, exit_fill, pnl, reason, exit_index) -> Trade:
     r = pnl / pos.initial_risk if pos.initial_risk not in (None, 0) else None
+    notional = pos.size * OZ_PER_LOT * pos.entry_price
+    leverage = notional / pos.entry_equity if pos.entry_equity else 0.0
     return Trade(
         entry_time=pos.entry_time, exit_time=exit_time, direction=pos.direction,
         size=pos.size, entry_price=pos.entry_price, exit_price=exit_fill,
         stop_loss=pos.stop_loss, take_profit=pos.take_profit, pnl=pnl, r_multiple=r,
         exit_reason=reason, tag=pos.tag, bars_held=exit_index - pos.entry_index,
-        initial_risk=pos.initial_risk,
+        initial_risk=pos.initial_risk, notional=notional, leverage=leverage,
     )
 
 
@@ -154,7 +159,8 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
     closes = data["close"].to_numpy(dtype=float)
     n = len(data)
 
-    strategy.on_start(Context(data, 0, None, equity, balance, _slice_htf(htf, times[0])))
+    strategy.on_start(Context(data, 0, None, equity, balance, _slice_htf(htf, times[0]),
+                              max_leverage=cfg.max_leverage))
 
     i = 0
     for i in range(n):
@@ -181,21 +187,26 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
                 trades.append(_make_trade(position, t, exit_fill, pnl, reason, i))
                 position = None
 
-        # 3) execute pending entry at THIS open, if flat
+        # 3) execute pending entry at THIS open, if flat (size capped to max leverage)
         if pending_order is not None and position is None:
             order = pending_order
             entry_fill = _buy_fill(o, cfg) if order.direction == "long" else _sell_fill(o, cfg)
-            init_risk = (abs(entry_fill - order.stop_loss) * order.size
-                         if order.stop_loss is not None else None)
-            position = Position(order.direction, order.size, entry_fill, t, i,
-                                order.stop_loss, order.take_profit, init_risk, order.tag)
+            size = clamp_lots(order.size, balance, entry_fill, cfg.max_leverage)
+            if size > 0:
+                init_risk = (abs(entry_fill - order.stop_loss) * size * OZ_PER_LOT
+                             if order.stop_loss is not None else None)
+                position = Position(direction=order.direction, size=size, entry_price=entry_fill,
+                                    entry_time=t, entry_index=i, entry_equity=balance,
+                                    stop_loss=order.stop_loss, take_profit=order.take_profit,
+                                    initial_risk=init_risk, tag=order.tag)
         pending_order = None
 
         # 4) mark-to-market at this close (so ctx.equity is current for sizing)
         equity = balance + _unrealized(position, c)
 
         # 5) ask strategy for decisions using data up to this bar
-        ctx = Context(data, i, position, equity, balance, _slice_htf(htf, t))
+        ctx = Context(data, i, position, equity, balance, _slice_htf(htf, t),
+                      max_leverage=cfg.max_leverage)
         strategy.on_bar(ctx)
         if ctx._order is not None and position is None:
             pending_order = ctx._order         # pyramiding not supported: ignore if in position
@@ -209,7 +220,8 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
             stopped = True
             break
 
-    strategy.on_finish(Context(data, i, position, equity, balance, _slice_htf(htf, times[i])))
+    strategy.on_finish(Context(data, i, position, equity, balance, _slice_htf(htf, times[i]),
+                               max_leverage=cfg.max_leverage))
 
     ec = pd.DataFrame(rows, columns=["time", "equity", "balance"]).set_index("time")
     peak = ec["equity"].cummax()

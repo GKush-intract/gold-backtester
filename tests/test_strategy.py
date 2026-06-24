@@ -24,7 +24,8 @@ def test_bar_and_history():
 
 def test_size_for_risk():
     ctx = Context(_data(), index=0, position=None, equity=10000, balance=10000, htf={})
-    assert ctx.size_for_risk(0.01, entry_price=2000, stop_price=1990) == 10.0
+    # lots = (10000*0.01) / (|2000-1990| * 100 oz/lot) = 100 / 1000 = 0.1 lots
+    assert ctx.size_for_risk(0.01, entry_price=2000, stop_price=1990) == 0.1
     assert ctx.size_for_risk(0.01, entry_price=2000, stop_price=2000) == 0.0
 
 

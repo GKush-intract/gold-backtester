@@ -43,7 +43,7 @@ class MyStrategy(Strategy):
         # ctx.bar, ctx.history, ctx.htf, ctx.position, ctx.equity
         # ctx.enter(direction, size, stop_loss=, take_profit=, tag=)  -> fills next bar open
         # ctx.close(reason=)                                          -> fills next bar open
-        # ctx.size_for_risk(risk_pct, entry, stop)                    -> units (oz)
+        # ctx.size_for_risk(risk_pct, entry, stop)                    -> size in LOTS
         ...
 ```
 
@@ -53,9 +53,15 @@ class MyStrategy(Strategy):
 - **Intrabar SL/TP:** default `stop_first` (pessimistic) when both lie in a bar's range;
   configurable `tp_first` / `optimistic`. Fill at the bracket price; **gap-through** fills at the
   (worse) open.
-- **Costs:** half-spread + slippage adverse on every fill; commission (`per_trade` + `per_unit`)
-  charged once per round-trip at close.
-- **Sizing/P&L** in units (oz): `pnl = (exit-entry)*size*(±1) - commission`. XAUUSD lot = 100 oz.
+- **Costs:** half-spread + slippage adverse on every fill; commission (`per_trade` flat +
+  `per_lot`) charged once per round-trip at close.
+- **Sizing/P&L** in **lots** (1 lot = 100 oz): `pnl = (exit-entry)*lots*100*(±1) - commission`.
+  `size_for_risk` returns lots, rounded down to 0.01 (micro-lot). Each trade also records its
+  `notional` (lots×100×price) and `leverage` (notional ÷ equity at entry).
+- **Leverage cap:** `max_leverage` caps a position's notional at `max_leverage × equity` (default
+  20×, `0` = unlimited). Risk-based sizing on a tight stop can otherwise imply large notional
+  because no broker margin is modeled — the cap is the guardrail. Size is rounded to the lot step
+  after capping; if it rounds to 0 lots, the trade is skipped.
 - **Equity vs balance:** `balance` = realized cash; `equity` = balance + unrealized at close;
   drawdown is computed off `equity`. Run stops if `equity <= 0`.
 - **Entry-bar brackets:** a position fills at a bar's open and its SL/TP are first checked on the

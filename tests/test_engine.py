@@ -55,7 +55,8 @@ def test_long_winner_pnl_with_costs():
     t = res.trades.iloc[0]
     assert t["entry_price"] == pytest.approx(100.1)
     assert t["exit_price"] == pytest.approx(107.9)
-    assert t["pnl"] == pytest.approx(14.6)
+    # size 2 lots = 200 oz: pnl = (107.9 - 100.1) * 200 - 1 commission = 1560 - 1 = 1559
+    assert t["pnl"] == pytest.approx(1559.0)
     assert t["exit_reason"] == "tp"
 
 
@@ -65,7 +66,8 @@ def test_short_loser_pnl():
     strat = EnterOnceShort(size=1.0, sl=110, tp=80)
     res = run_backtest(cfg, strat, data)
     t = res.trades.iloc[0]
-    assert t["pnl"] == pytest.approx(-10.0)
+    # size 1 lot = 100 oz, short: pnl = (110 - 100) * 100 * -1 = -1000
+    assert t["pnl"] == pytest.approx(-1000.0)
     assert t["exit_reason"] == "stop"
 
 
@@ -96,7 +98,8 @@ def test_equity_vs_balance_open_position():
     res = run_backtest(cfg, strat, data)
     ec = res.equity_curve
     assert ec["balance"].iloc[-1] == pytest.approx(cfg.opening_balance)
-    assert ec["equity"].iloc[-1] == pytest.approx(cfg.opening_balance + 5)
+    # 1 lot = 100 oz: unrealized = (105 - 100) * 100 = 500
+    assert ec["equity"].iloc[-1] == pytest.approx(cfg.opening_balance + 500)
 
 
 def test_equity_zero_stops_run():

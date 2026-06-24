@@ -56,8 +56,12 @@ with st.sidebar:
     spread = st.number_input("Spread (price units)", 0.0, 10.0, 0.30)
     slippage = st.number_input("Slippage (price units)", 0.0, 10.0, 0.0)
     commission_trade = st.number_input("Commission per trade ($)", 0.0, 1000.0, 0.0)
-    commission_unit = st.number_input("Commission per unit ($/oz)", 0.0, 100.0, 0.0)
+    commission_lot = st.number_input("Commission per lot ($/lot)", 0.0, 1000.0, 0.0,
+                                     help="1 lot = 100 oz")
+    max_leverage = st.number_input("Max leverage (×)", 0.0, 500.0, 20.0,
+                                   help="Caps position notional at this × equity; 0 = unlimited")
     intrabar = st.selectbox("Intrabar SL/TP rule", ["stop_first", "tp_first", "optimistic"])
+    st.caption("Size is in **lots** (1 lot = 100 oz). The trade log shows notional & leverage.")
     run = st.button("▶ Run backtest", type="primary")
 
 # ---------------- Run ----------------
@@ -92,7 +96,8 @@ if run:
 
     cfg = BacktestConfig(opening_balance=balance, spread=spread, slippage=slippage,
                          commission_per_trade=commission_trade,
-                         commission_per_unit=commission_unit, intrabar=intrabar)
+                         commission_per_lot=commission_lot, max_leverage=max_leverage,
+                         intrabar=intrabar)
     strat = strat_cls(**param_values)
 
     t0 = dt.datetime.now()
