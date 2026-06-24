@@ -4,65 +4,83 @@
     {
       "id": 0,
       "subject": "Task 0: Project scaffold + requirements",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Create directory tree, pinned requirements.txt, package inits, conftest.py; confirm venv installs.\n\n```json:metadata\n{\"files\": [\"requirements.txt\", \"src/__init__.py\", \"conftest.py\"], \"verifyCommand\": \".venv/bin/pip install -r requirements.txt && .venv/bin/python -c \\\"import src\\\"\", \"acceptanceCriteria\": [\"pip install succeeds\", \"import src works\"]}\n```"
     },
     {
       "id": 1,
       "subject": "Task 1: Dukascopy data fetcher",
-      "status": "pending",
-      "blockedBy": [0],
+      "status": "completed",
+      "blockedBy": [
+        0
+      ],
       "description": "**Goal:** fetch_ohlc() downloads XAUUSD candles from Dukascopy, caches to parquet; cache hit avoids network.\n\n```json:metadata\n{\"files\": [\"src/data_fetcher.py\", \"tests/test_data_fetcher.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_data_fetcher.py -v\", \"acceptanceCriteria\": [\"returns contract columns\", \"cache hit avoids download\", \"bad timeframe/dates raise\"]}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: Data loader (validate/slice/resample)",
-      "status": "pending",
-      "blockedBy": [0],
+      "status": "completed",
+      "blockedBy": [
+        0
+      ],
       "description": "**Goal:** load_ohlc() normalizes/validates OHLC to UTC-indexed frame; resample() builds higher TF.\n\n```json:metadata\n{\"files\": [\"src/data_loader.py\", \"tests/test_data_loader.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_data_loader.py -v\", \"acceptanceCriteria\": [\"accepts CSV path and DataFrame\", \"rejects bad OHLC/NaN/naive-tz\", \"resample right-labeled drops gaps\"]}\n```"
     },
     {
       "id": 3,
       "subject": "Task 3: Strategy interface (Order/Position/Context/Strategy)",
-      "status": "pending",
-      "blockedBy": [0],
+      "status": "completed",
+      "blockedBy": [
+        0
+      ],
       "description": "**Goal:** Plug-in contract: dataclasses + Context recording order intents + Strategy base with params schema.\n\n```json:metadata\n{\"files\": [\"src/strategy.py\", \"tests/test_strategy.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_strategy.py -v\", \"acceptanceCriteria\": [\"enter records Order, close sets flag\", \"bar/history correct\", \"size_for_risk math\", \"param merge\"]}\n```"
     },
     {
       "id": 4,
       "subject": "Task 4: Engine + correctness tests",
-      "status": "pending",
-      "blockedBy": [3],
+      "status": "completed",
+      "blockedBy": [
+        3
+      ],
       "description": "**Goal:** Bar-by-bar engine: next-bar-open fills, costs, intrabar bracket resolution, gap-through, equity/balance; hand-computed tests.\n\n```json:metadata\n{\"files\": [\"src/engine.py\", \"tests/test_engine.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_engine.py -v\", \"acceptanceCriteria\": [\"no look-ahead next-open\", \"long/short pnl with costs\", \"intrabar stop_first vs tp_first\", \"gap-through at open\", \"equity vs balance\", \"equity<=0 stops\"]}\n```"
     },
     {
       "id": 5,
       "subject": "Task 5: Metrics",
-      "status": "pending",
-      "blockedBy": [4],
+      "status": "completed",
+      "blockedBy": [
+        4
+      ],
       "description": "**Goal:** Pure compute_metrics(result) -> (dict, summary_df); PF, R, drawdown, sharpe/sortino, exposure; divide-by-zero guards.\n\n```json:metadata\n{\"files\": [\"src/metrics.py\", \"tests/test_metrics.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_metrics.py -v\", \"acceptanceCriteria\": [\"PF/win-rate/expectancy correct\", \"max drawdown abs+pct+duration\", \"no_trades flag + PF inf\", \"returns dict + df\"]}\n```"
     },
     {
       "id": 6,
       "subject": "Task 6: Runner + MA crossover + auto-discovery + CLI",
-      "status": "pending",
-      "blockedBy": [2, 4, 5],
+      "status": "completed",
+      "blockedBy": [
+        2,
+        4,
+        5
+      ],
       "description": "**Goal:** runner.run_backtest (builds HTF + delegates), MACrossover strategy, auto-discovery registry, headless CLI.\n\n```json:metadata\n{\"files\": [\"src/runner.py\", \"src/strategies/ma_crossover.py\", \"src/strategies/__init__.py\", \"run_cli.py\", \"tests/test_runner.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_runner.py -v && .venv/bin/python run_cli.py --synthetic\", \"acceptanceCriteria\": [\"registry discovers MACrossover\", \"runner builds HTF\", \"MACrossover >=1 trade\", \"CLI prints metrics\"]}\n```"
     },
     {
       "id": 7,
       "subject": "Task 7: Streamlit UI",
-      "status": "pending",
-      "blockedBy": [6],
+      "status": "completed",
+      "blockedBy": [
+        6
+      ],
       "description": "**Goal:** Thin UI: data source + date range + dynamic params + costs -> run_backtest -> cards, equity/drawdown chart, R histogram, trade log CSV.\n\n```json:metadata\n{\"files\": [\"app.py\"], \"verifyCommand\": \".venv/bin/python -c \\\"import ast; ast.parse(open('app.py').read()); print('ok')\\\"\", \"acceptanceCriteria\": [\"parses/compiles\", \"sidebar data+params+costs+run\", \"main cards+charts+trade log\"]}\n```"
     },
     {
       "id": 8,
       "subject": "Task 8: SMC template + README",
-      "status": "pending",
-      "blockedBy": [6],
+      "status": "completed",
+      "blockedBy": [
+        6
+      ],
       "description": "**Goal:** Documented non-functional smc_template.py (HTF/session/structural stop stubs) + README (data, fetch, add-strategy, engine assumptions, run).\n\n```json:metadata\n{\"files\": [\"src/strategies/smc_template.py\", \"README.md\"], \"verifyCommand\": \".venv/bin/pytest -q\", \"acceptanceCriteria\": [\"template with TODOs doesn't trade\", \"appears in registry\", \"full suite passes\", \"README documents assumptions\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-06-24T17:30:00+05:30"
+  "lastUpdated": "2026-06-24T18:11:08.700783+05:30"
 }
