@@ -97,3 +97,14 @@ def test_equity_vs_balance_open_position():
     ec = res.equity_curve
     assert ec["balance"].iloc[-1] == pytest.approx(cfg.opening_balance)
     assert ec["equity"].iloc[-1] == pytest.approx(cfg.opening_balance + 5)
+
+
+def test_equity_zero_stops_run():
+    # Huge long with no stop; price collapses so mark-to-market equity goes <= 0 -> run halts.
+    data = make_data([(100, 100, 100, 100), (100, 100, 100, 100),
+                      (100, 100, 100, 80), (80, 80, 80, 80)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    strat = EnterOnceLong(size=1000.0, sl=None, tp=None)
+    res = run_backtest(cfg, strat, data)
+    assert res.stopped_out is True
+    assert len(res.equity_curve) < len(data)  # halted before the final bar
