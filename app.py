@@ -48,6 +48,8 @@ with st.sidebar:
         elif ptype == "float":
             param_values[pname] = st.number_input(pname, float(pmin), float(pmax),
                                                    float(default), help=help_)
+        elif ptype == "bool":
+            param_values[pname] = st.checkbox(pname, bool(default), help=help_)
         else:
             param_values[pname] = st.text_input(pname, str(default), help=help_)
 
