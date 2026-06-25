@@ -65,9 +65,11 @@ class ShalabhStrategy(Strategy):
     VWAP (low <= VWAP) and reclaimed it, bullish candle, ADX > threshold, inside the IST session.
     Short is the mirror. Exits: close crossing back through VWAP, or a trailing stop.
 
-    Engine-fit notes: trailing stop and VWAP-cross exits are evaluated on bar close and fill at
-    the next bar's open (no intrabar trailing primitive). VWAP is daily-anchored to the IST day
-    using close*volume (tick volume). One position at a time.
+    Engine-fit notes: the trailing stop is engine-managed intrabar (trail distance = trail_pct of
+    entry price, attached at entry). The VWAP-cross exit is evaluated on bar close and fills next
+    open. VWAP is daily-anchored to the IST day using close*volume (tick volume). One position at
+    a time. NOTE: TradingView's trail_points/trail_offset are in TICKS, so the original Pine ran a
+    far tighter (~$0.10) intrabar trail than the 0.5% intended here — see the design notes.
     """
 
     name = "Shalabh's strategy"
@@ -92,8 +94,6 @@ class ShalabhStrategy(Strategy):
         self._adx = _wilder_adx(df["high"].to_numpy(float), df["low"].to_numpy(float),
                                 close.to_numpy(float), self.p["adx_len"])
         self._warmup = max(self.p["ema_trend"], 2 * self.p["adx_len"] + 1)
-        self._peak = None
-        self._trough = None
 
     @staticmethod
     def _daily_vwap(df):
@@ -128,27 +128,14 @@ class ShalabhStrategy(Strategy):
         vwap = self._vwap[i]
         adx = self._adx[i]
 
-        # --- manage an open position: VWAP-cross exit or trailing stop ---
+        # --- manage an open position: VWAP-cross exit (the trailing stop is engine-managed
+        #     intrabar from the trail distance attached at entry) ---
         if ctx.position is not None:
-            if ctx.position.direction == "long":
-                self._peak = h if self._peak is None else max(self._peak, h)
-                trail_level = self._peak * (1 - self.p["trail_pct"] / 100.0)
-                if c < vwap:
-                    ctx.close("vwap_exit")
-                elif c <= trail_level:
-                    ctx.close("trailing_stop")
-            else:  # short
-                self._trough = l if self._trough is None else min(self._trough, l)
-                trail_level = self._trough * (1 + self.p["trail_pct"] / 100.0)
-                if c > vwap:
-                    ctx.close("vwap_exit")
-                elif c >= trail_level:
-                    ctx.close("trailing_stop")
+            if ctx.position.direction == "long" and c < vwap:
+                ctx.close("vwap_exit")
+            elif ctx.position.direction == "short" and c > vwap:
+                ctx.close("vwap_exit")
             return
-
-        # flat: reset trailing trackers, then look for entries
-        self._peak = None
-        self._trough = None
 
         if not self._in_session(bar["time"]):
             return
@@ -165,7 +152,8 @@ class ShalabhStrategy(Strategy):
                       and h >= vwap and c < vwap
                       and c < o)
 
+        trail = c * self.p["trail_pct"] / 100.0  # trailing-stop distance in price ($)
         if long_cond:
-            ctx.enter("long", self._size(ctx, c), tag="BUY")
+            ctx.enter("long", self._size(ctx, c), tag="BUY", trail=trail)
         elif short_cond:
-            ctx.enter("short", self._size(ctx, c), tag="SELL")
+            ctx.enter("short", self._size(ctx, c), tag="SELL", trail=trail)

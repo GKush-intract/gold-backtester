@@ -53,6 +53,13 @@ class MyStrategy(Strategy):
 - **Intrabar SL/TP:** default `stop_first` (pessimistic) when both lie in a bar's range;
   configurable `tp_first` / `optimistic`. Fill at the bracket price; **gap-through** fills at the
   (worse) open.
+- **Trailing stop:** attach a price distance at entry via `ctx.enter(..., trail=<distance>)`. The
+  engine trails it **intrabar** — the level starts at `entry ∓ trail` (acting as the initial stop)
+  and ratchets toward price using each bar's high/low *after* surviving the bar. Resolution is
+  **conservative**: a retrace can hit the level carried into a bar before that bar's extreme would
+  advance it. (TradingView is optimistic and its `trail_points`/`trail_offset` are in **ticks**,
+  not price — a tight tick-trail there books unrealistic intrabar wins; ours won't.) Exits show as
+  `trailing_stop`; a fixed `stop_loss` and a `trail` can coexist (the tighter binds).
 - **Costs:** half-spread + slippage adverse on every fill; commission (`per_trade` flat +
   `per_lot`) charged once per round-trip at close.
 - **Sizing/P&L** in **lots** (1 lot = 100 oz): `pnl = (exit-entry)*lots*100*(±1) - commission`.

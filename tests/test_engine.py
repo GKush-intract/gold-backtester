@@ -18,13 +18,13 @@ class EnterOnceLong(Strategy):
     """Enter long on the first bar; fixed SL/TP; never re-enter."""
     name = "enter_once_long"
 
-    def __init__(self, size=1.0, sl=None, tp=None, **kw):
+    def __init__(self, size=1.0, sl=None, tp=None, trail=None, **kw):
         super().__init__(**kw)
-        self.size, self.sl, self.tp, self.done = size, sl, tp, False
+        self.size, self.sl, self.tp, self.trail, self.done = size, sl, tp, trail, False
 
     def on_bar(self, ctx):
         if not self.done and ctx.position is None:
-            ctx.enter("long", self.size, stop_loss=self.sl, take_profit=self.tp)
+            ctx.enter("long", self.size, stop_loss=self.sl, take_profit=self.tp, trail=self.trail)
             self.done = True
 
 
@@ -33,7 +33,7 @@ class EnterOnceShort(EnterOnceLong):
 
     def on_bar(self, ctx):
         if not self.done and ctx.position is None:
-            ctx.enter("short", self.size, stop_loss=self.sl, take_profit=self.tp)
+            ctx.enter("short", self.size, stop_loss=self.sl, take_profit=self.tp, trail=self.trail)
             self.done = True
 
 
@@ -125,3 +125,50 @@ def test_entry_bar_bracket_not_checked():
     assert t["exit_reason"] == "stop"
     assert t["exit_price"] == pytest.approx(95.0)
     assert t["bars_held"] == 1  # exited on the bar AFTER entry, not the entry bar
+
+
+def test_trailing_stop_long_locks_profit():
+    # Enter long @100 (bar1 open), trail=5 -> initial level 95. bar2 high 110 lifts level to 105.
+    # bar3 retraces (low 104 <= 105) -> exit at the trailed level 105 with profit.
+    data = make_data([(100, 100, 100, 100), (100, 100, 100, 100),
+                      (100, 110, 100, 108), (108, 108, 104, 104)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    res = run_backtest(cfg, EnterOnceLong(size=1.0, trail=5.0), data)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == pytest.approx(105.0)
+    assert t["pnl"] == pytest.approx(500.0)  # (105-100)*1 lot*100 oz
+
+
+def test_trailing_stop_long_initial_acts_as_stop():
+    # Price never advances; trail's initial level (entry-5=95) acts as the stop.
+    data = make_data([(100, 100, 100, 100), (100, 100, 100, 100), (100, 100, 93, 96)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    res = run_backtest(cfg, EnterOnceLong(size=1.0, trail=5.0), data)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == pytest.approx(95.0)
+    assert t["pnl"] == pytest.approx(-500.0)
+
+
+def test_trailing_stop_gap_through_fills_at_open():
+    # bar2 gaps below the initial trail level (95) at the open -> fill at the worse open price.
+    data = make_data([(100, 100, 100, 100), (100, 100, 100, 100), (90, 92, 88, 91)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    res = run_backtest(cfg, EnterOnceLong(size=1.0, trail=5.0), data)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == pytest.approx(90.0)
+
+
+def test_trailing_stop_short_locks_profit():
+    # Short @100 (bar1 open), trail=5 -> initial level 105. bar2 low 90 lowers level to 95.
+    # bar3 rallies (high 96 >= 95) -> exit at 95 with profit.
+    data = make_data([(100, 100, 100, 100), (100, 100, 100, 100),
+                      (100, 100, 90, 92), (92, 96, 92, 95)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    res = run_backtest(cfg, EnterOnceShort(size=1.0, trail=5.0), data)
+    t = res.trades.iloc[0]
+    assert t["exit_reason"] == "trailing_stop"
+    assert t["exit_price"] == pytest.approx(95.0)
+    assert t["pnl"] == pytest.approx(500.0)  # short: (100-95)*1 lot*100 oz

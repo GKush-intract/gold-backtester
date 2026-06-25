@@ -78,43 +78,61 @@ def _unrealized(pos: Optional[Position], price: float) -> float:
     return (price - pos.entry_price) * pos.size * OZ_PER_LOT * sign
 
 
+def _effective_stop(pos: Position):
+    """The binding stop for this bar = the tighter of the fixed stop and the trailing level.
+    Returns (stop_price | None, is_trailing)."""
+    sl, trail_lvl = pos.stop_loss, pos.trail_level
+    if sl is not None and trail_lvl is not None:
+        if pos.direction == "long":
+            return (max(sl, trail_lvl), trail_lvl >= sl)
+        return (min(sl, trail_lvl), trail_lvl <= sl)
+    if trail_lvl is not None:
+        return (trail_lvl, True)
+    if sl is not None:
+        return (sl, False)
+    return (None, False)
+
+
 def _resolve_bracket(pos: Position, o, h, l, cfg: BacktestConfig):
-    """Return (reason, base_price) if SL/TP fires on this bar, else None.
-    Handles gap-through at the open and the stop/tp intrabar policy."""
-    sl, tp = pos.stop_loss, pos.take_profit
+    """Return (reason, base_price) if a stop / trailing-stop / TP fires on this bar, else None.
+    Uses the stop level carried INTO the bar (pessimistic: a retrace can hit it before the bar's
+    extreme would advance a trailing stop). Handles gap-through at the open and the intrabar policy."""
+    eff_stop, is_trail = _effective_stop(pos)
+    tp = pos.take_profit
     stop_hit = tp_hit = False
     stop_base = tp_base = None
 
     if pos.direction == "long":
-        if sl is not None:
-            if o <= sl:            # gapped through the stop at the open
+        if eff_stop is not None:
+            if o <= eff_stop:           # gapped through the stop at the open
                 stop_hit, stop_base = True, o
-            elif l <= sl:
-                stop_hit, stop_base = True, sl
+            elif l <= eff_stop:
+                stop_hit, stop_base = True, eff_stop
         if tp is not None:
-            if o >= tp:            # gapped through the target at the open
+            if o >= tp:                 # gapped through the target at the open
                 tp_hit, tp_base = True, o
             elif h >= tp:
                 tp_hit, tp_base = True, tp
     else:  # short
-        if sl is not None:
-            if o >= sl:
+        if eff_stop is not None:
+            if o >= eff_stop:
                 stop_hit, stop_base = True, o
-            elif h >= sl:
-                stop_hit, stop_base = True, sl
+            elif h >= eff_stop:
+                stop_hit, stop_base = True, eff_stop
         if tp is not None:
             if o <= tp:
                 tp_hit, tp_base = True, o
             elif l <= tp:
                 tp_hit, tp_base = True, tp
 
+    stop_reason = "trailing_stop" if is_trail else "stop"
     if stop_hit and tp_hit:
         # With a single bracket, "optimistic" (assume favorable fill) == "tp_first".
         if cfg.intrabar == "tp_first" or cfg.intrabar == "optimistic":
             return ("tp", tp_base)
-        return ("stop", stop_base)          # "stop_first" default (pessimistic)
+        return (stop_reason, stop_base)     # "stop_first" default (pessimistic)
     if stop_hit:
-        return ("stop", stop_base)
+        return (stop_reason, stop_base)
     if tp_hit:
         return ("tp", tp_base)
     return None
@@ -187,18 +205,42 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
                 trades.append(_make_trade(position, t, exit_fill, pnl, reason, i))
                 position = None
 
+        # 2b) ratchet the trailing stop using this bar's extreme (only after surviving the bar)
+        if position is not None and position.trail is not None:
+            if position.direction == "long":
+                lvl = h - position.trail
+                if position.trail_level is None or lvl > position.trail_level:
+                    position.trail_level = lvl
+            else:
+                lvl = l + position.trail
+                if position.trail_level is None or lvl < position.trail_level:
+                    position.trail_level = lvl
+
         # 3) execute pending entry at THIS open, if flat (size capped to max leverage)
         if pending_order is not None and position is None:
             order = pending_order
             entry_fill = _buy_fill(o, cfg) if order.direction == "long" else _sell_fill(o, cfg)
             size = clamp_lots(order.size, balance, entry_fill, cfg.max_leverage)
             if size > 0:
-                init_risk = (abs(entry_fill - order.stop_loss) * size * OZ_PER_LOT
-                             if order.stop_loss is not None else None)
+                if order.trail is not None:
+                    trail_level = (entry_fill - order.trail if order.direction == "long"
+                                   else entry_fill + order.trail)
+                else:
+                    trail_level = None
+                # initial risk: fixed stop if set, else the trailing distance, else undefined
+                if order.stop_loss is not None:
+                    risk_price = order.stop_loss
+                elif trail_level is not None:
+                    risk_price = trail_level
+                else:
+                    risk_price = None
+                init_risk = (abs(entry_fill - risk_price) * size * OZ_PER_LOT
+                             if risk_price is not None else None)
                 position = Position(direction=order.direction, size=size, entry_price=entry_fill,
                                     entry_time=t, entry_index=i, entry_equity=balance,
                                     stop_loss=order.stop_loss, take_profit=order.take_profit,
-                                    initial_risk=init_risk, tag=order.tag)
+                                    initial_risk=init_risk, tag=order.tag,
+                                    trail=order.trail, trail_level=trail_level)
         pending_order = None
 
         # 4) mark-to-market at this close (so ctx.equity is current for sizing)

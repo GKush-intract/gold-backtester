@@ -36,6 +36,7 @@ class Order:
     stop_loss: Optional[float] = None  # absolute price
     take_profit: Optional[float] = None
     tag: str = ""
+    trail: Optional[float] = None      # trailing-stop distance in price (None = no trail)
 
 
 @dataclass
@@ -50,6 +51,8 @@ class Position:
     take_profit: Optional[float]
     initial_risk: Optional[float]      # $ risked = abs(entry_fill - stop) * size_lots * OZ_PER_LOT
     tag: str = ""
+    trail: Optional[float] = None       # trailing-stop distance in price (None = no trail)
+    trail_level: Optional[float] = None # current trailing stop price (engine-managed)
 
 
 class Context:
@@ -84,13 +87,14 @@ class Context:
         """All bars 0..index inclusive (no look-ahead)."""
         return self.data.iloc[: self.index + 1]
 
-    def enter(self, direction, size, stop_loss=None, take_profit=None, tag=""):
-        """Request a market entry, filled next bar open. `size` is in LOTS (1 lot = 100 oz)."""
+    def enter(self, direction, size, stop_loss=None, take_profit=None, tag="", trail=None):
+        """Request a market entry, filled next bar open. `size` is in LOTS (1 lot = 100 oz).
+        `trail` is an optional trailing-stop distance in price (engine trails it intrabar)."""
         if direction not in ("long", "short"):
             raise ValueError(f"direction must be 'long' or 'short', got {direction!r}")
         if size is None or size <= 0:
             return  # ignore non-positive sizing
-        self._order = Order(direction, float(size), stop_loss, take_profit, tag)
+        self._order = Order(direction, float(size), stop_loss, take_profit, tag, trail)
 
     def close(self, reason="manual"):
         self._close_requested = True
