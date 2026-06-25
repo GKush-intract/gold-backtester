@@ -1,0 +1,95 @@
+// VWAP + EMA PRO Intraday Strategy — "realistic" revision
+//
+// This is the TradingView/PineScript counterpart to src/strategies/shalabh.py.
+// It corrects four issues that made the original backtest unrealistically good
+// (profit factor ~166, 84% win rate, 0.92% drawdown on 4H gold):
+//
+//   FIX #1  Costs were missing. Added commission + slippage. (Set to YOUR broker.)
+//   FIX #2  `emaSl` typo -> `emaSlow` (the original long-trend condition referenced
+//           an undefined variable).
+//   FIX #3  trail_points/trail_offset are in TICKS, not price. The original passed a
+//           dollar value (close*0.5/100 ~= $10), so TradingView read ~10 as ~10 ticks
+//           (~$0.10) — a sub-spread trailing stop that books fake intrabar wins.
+//           Now the distance is converted to ticks so 0.5% really means ~$10.
+//   FIX #4  Added a hard % stop for gap/news protection (the trail only arms after
+//           price moves in your favor; before that you were unprotected).
+//
+// SETTINGS (not code — set in Strategy Properties):
+//   - Enable "Use bar magnifier" (Recalculation) so intrabar fills use lower-timeframe
+//     data instead of TradingView's optimistic same-bar assumption. (Paid plans.)
+//   - "Recalculate after order is filled" = ON; "on every tick" = OFF.
+//   - Run on the intended intraday timeframe (5-15 min), NOT 4H: the IST 09:30-14:30
+//     session filter and a daily-resetting VWAP barely function on 4H.
+//   - Use realistic Initial capital and order size (avoid unintended leverage).
+
+//@version=6
+strategy("VWAP + EMA PRO Intraday v6 (realistic)", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     // FIX #1 — model costs (TradingView can't model spread directly; approximate via slippage)
+     commission_type=strategy.commission.percent, commission_value=0.01,  // set to YOUR broker's fee
+     slippage=15,                          // adverse slippage in TICKS (~$0.15 on gold; covers ~half the spread)
+     calc_on_every_tick=false, process_orders_on_close=false)  // signals on close, fill next bar (no repaint)
+
+// === INPUTS ===
+emaFastLen  = input.int(9,  "EMA Fast")
+emaSlowLen  = input.int(15, "EMA Slow")
+emaTrendLen = input.int(200,"EMA Trend")
+adxLen      = input.int(14, "ADX Length")
+adxThresh   = input.float(20,"ADX Threshold")
+useTimeFilter = input.bool(true, "Use Time Filter")
+trailPerc     = input.float(0.5, "Trailing Stop %", step=0.1)
+hardStopPerc  = input.float(1.0, "Hard Stop % (gap protection)", step=0.1)
+
+// === INDICATORS ===
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaTrend = ta.ema(close, emaTrendLen)
+vwapVal  = ta.vwap(close)
+[diplus, diminus, adx] = ta.dmi(adxLen, adxLen)
+
+// === TIME FILTER ===
+startTime = timestamp("Asia/Kolkata", year, month, dayofmonth, 9, 30)
+endTime   = timestamp("Asia/Kolkata", year, month, dayofmonth, 14, 30)
+inSession = not useTimeFilter or (time >= startTime and time <= endTime)
+
+// === CONDITIONS ===
+longTrend   = emaFast > emaSlow and close > emaTrend      // FIX #2 — was `emaSl` (typo / undefined)
+longVWAP    = close > vwapVal
+pullbackL   = low <= vwapVal and close > vwapVal
+bullCandle  = close > open
+strongTrend = adx > adxThresh
+longCondition  = longTrend and longVWAP and pullbackL and bullCandle and strongTrend and inSession
+
+shortTrend  = emaFast < emaSlow and close < emaTrend
+shortVWAP   = close < vwapVal
+pullbackS   = high >= vwapVal and close < vwapVal
+bearCandle  = close < open
+shortCondition = shortTrend and shortVWAP and pullbackS and bearCandle and strongTrend and inSession
+
+// === ENTRIES ===
+if longCondition
+    strategy.entry("BUY", strategy.long)
+if shortCondition
+    strategy.entry("SELL", strategy.short)
+
+// === VWAP EXITS ===
+if close < vwapVal
+    strategy.close("BUY")
+if close > vwapVal
+    strategy.close("SELL")
+
+// === TRAILING STOP ===
+// FIX #3 — trail_points/trail_offset are in TICKS, not price. Convert price -> ticks:
+trailTicks = math.max(1, math.round(close * trailPerc / 100 / syminfo.mintick))
+// FIX #4 — hard % stop for gap protection before the trail arms
+longStop  = strategy.position_avg_price * (1 - hardStopPerc / 100)
+shortStop = strategy.position_avg_price * (1 + hardStopPerc / 100)
+
+strategy.exit("Exit Long",  from_entry="BUY",  stop=longStop,  trail_points=trailTicks, trail_offset=trailTicks)
+strategy.exit("Exit Short", from_entry="SELL", stop=shortStop, trail_points=trailTicks, trail_offset=trailTicks)
+
+// === PLOTS ===
+plot(emaFast,  color=color.green)
+plot(emaSlow,  color=color.red)
+plot(emaTrend, color=color.blue)
+plot(vwapVal,  color=color.orange)
