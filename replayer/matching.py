@@ -29,9 +29,8 @@ class LiveBroker:
     def _dir(self, side: str) -> str:
         return "long" if side == "buy" else "short"
 
-    def _open_position(self, side, qty_lots, base_price, sl, tp, ts) -> BrokerEvent:
+    def _open_position(self, side, qty_lots, fill, sl, tp, ts) -> BrokerEvent:
         direction = self._dir(side)
-        fill = _buy_fill(base_price, self.cfg) if side == "buy" else _sell_fill(base_price, self.cfg)
         size = clamp_lots(qty_lots, self.balance, fill, self.cfg.max_leverage)
         if size <= 0:
             return BrokerEvent("order_reject", ts, {"reason": "size_zero_or_leverage"})
@@ -57,13 +56,17 @@ class LiveBroker:
 
     def submit(self, req: OrderReq) -> BrokerEvent:
         ts = self._bar["t"] if self._bar else 0
+        if self.stopped:
+            return BrokerEvent("order_reject", ts, {"client_id": req.client_id, "reason": "stopped"})
         if req.qty_lots <= 0:
             return BrokerEvent("order_reject", ts, {"client_id": req.client_id, "reason": "qty<=0"})
         if req.order_type == "market":
             if self.position is not None:
                 return BrokerEvent("order_reject", ts,
                                    {"client_id": req.client_id, "reason": "position_open"})
-            ev = self._open_position(req.side, req.qty_lots, self._price(), req.sl, req.tp, ts)
+            fill = (_buy_fill(self._price(), self.cfg) if req.side == "buy"
+                    else _sell_fill(self._price(), self.cfg))
+            ev = self._open_position(req.side, req.qty_lots, fill, req.sl, req.tp, ts)
             ev.data["client_id"] = req.client_id
             return ev
         if req.price is None:
@@ -102,11 +105,12 @@ class LiveBroker:
                 reason, base = hit
                 events.append(self._close(base, "stop" if reason in ("stop", "trailing_stop") else "tp", ts))
 
-        if self.position is None and self.orders:
+        if not self.stopped and self.position is None and self.orders:
             still: list[WorkingOrder] = []
             for ordr in self.orders:
                 if self.position is None and self._order_triggers(ordr, h, l):
-                    ev = self._open_position(ordr.side, ordr.qty_lots, ordr.price,
+                    fill = self._entry_fill(ordr, o)
+                    ev = self._open_position(ordr.side, ordr.qty_lots, fill,
                                              ordr.sl, ordr.tp, ts)
                     ev.data["client_id"] = ordr.client_id
                     events.append(ev)
@@ -119,8 +123,19 @@ class LiveBroker:
             self.stopped = True
             if self.position is not None:
                 events.append(self._close(c, "margin", ts))
+            self.orders = []
+            self.equity = self.balance
             events.append(BrokerEvent("margin_stop", ts, {"equity": self.equity}))
         return events
+
+    def _entry_fill(self, o: WorkingOrder, bar_open: float) -> float:
+        """Final fill price for a resting order. Limit fills EXACTLY at its price (never worse);
+        stop fills at the worse of open vs. stop price, then pays spread + slippage."""
+        if o.order_type == "limit":
+            return o.price
+        if o.side == "buy":
+            return _buy_fill(max(bar_open, o.price), self.cfg)
+        return _sell_fill(min(bar_open, o.price), self.cfg)
 
     def account(self) -> dict:
         return {"balance": self.balance, "equity": self.equity,

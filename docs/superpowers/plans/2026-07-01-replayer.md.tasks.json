@@ -4,13 +4,13 @@
     {
       "id": 1,
       "subject": "Task 1: Scaffold, deps, health server",
-      "status": "pending",
+      "status": "completed",
       "description": "Create replayer package, add backend deps, FastAPI health endpoint + static mount.\n\n```json:metadata\n{\"files\": [\"replayer/__init__.py\", \"replayer/server.py\", \"requirements.txt\", \"tests/test_replayer_server.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_replayer_server.py -v\", \"acceptanceCriteria\": [\"deps installed\", \"GET /api/health returns {status: ok}\", \"test passes\"]}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: Market feed (market.py)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "Load m1 window; causal bar iterator with seek + skip-gap + JSON candles.\n\n```json:metadata\n{\"files\": [\"replayer/market.py\", \"tests/test_replayer_market.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_replayer_market.py -v\", \"acceptanceCriteria\": [\"from_parquet loads sorted\", \"next_bar/at_end\", \"seek\", \"skip_gap\", \"candles() shape\"]}\n```"
     },
