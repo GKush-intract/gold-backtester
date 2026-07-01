@@ -2,6 +2,8 @@ import { ChartView } from './chart.js';
 import { WS } from './ws.js';
 import { mountClock } from './clock.js';
 import { mountTrade, renderAccount } from './trade.js';
+import { mountDrawing } from './drawing.js';
+import { mountNotes } from './notes.js';
 
 async function boot() {
   const trader = prompt('Trader name?', 'anon') || 'anon';
@@ -24,6 +26,8 @@ async function boot() {
 
   mountClock(ws, chart);
   mountTrade(ws);
+  mountDrawing(ws, chart);
+  mountNotes(ws, session_id);
 }
 
 function onMessage(msg, chart) {
