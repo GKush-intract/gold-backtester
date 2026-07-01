@@ -1,6 +1,7 @@
 import { ChartView } from './chart.js';
 import { WS } from './ws.js';
 import { mountClock } from './clock.js';
+import { mountTrade, renderAccount } from './trade.js';
 
 async function boot() {
   const trader = prompt('Trader name?', 'anon') || 'anon';
@@ -22,6 +23,7 @@ async function boot() {
   window.__chart = chart;
 
   mountClock(ws, chart);
+  mountTrade(ws);
 }
 
 function onMessage(msg, chart) {
@@ -34,7 +36,7 @@ function onMessage(msg, chart) {
       break;
     }
     case 'account':
-      renderAccountBasic(msg);
+      renderAccount(msg);
       break;
     case 'seeked':
       chart.setHistory(window.__allCandles.filter((c) => c.t <= msg.to));
@@ -42,14 +44,6 @@ function onMessage(msg, chart) {
     default:
       break;
   }
-}
-
-function renderAccountBasic(msg) {
-  const a = document.getElementById('account');
-  if (!a) return;
-  a.innerHTML = `<h4>Account</h4><table>
-    <tr><td>Balance</td><td>${(msg.balance ?? 0).toFixed(2)}</td></tr>
-    <tr><td>Equity</td><td>${(msg.equity ?? 0).toFixed(2)}</td></tr></table>`;
 }
 
 boot();
