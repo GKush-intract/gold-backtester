@@ -80,3 +80,26 @@ class MyStrategy(Strategy):
   **inflated / not directly comparable to daily Sharpe** — treat them as relative, not absolute.
 - **v1 limits (TODO):** one position at a time (no pyramiding), single TP (no partials),
   market entries only (no pending limit/stop entries), no margin/leverage modeling.
+
+## Replayer
+
+A standalone market-replayer (separate from the Streamlit backtester) that plays the
+Jan–Mar 2024 XAUUSD m1 feed back as a simulated live market for discretionary trading, and
+records every action for later strategy analysis.
+
+Run:
+
+    bash scripts/run_replayer.sh          # http://localhost:8502
+
+Controls: Play/Pause, speed (1–MAX ×), Step, Skip-gap, and a timeframe switcher (m1–d1,
+resampled live from m1). Trade with market/limit/stop bracket orders (SL/TP), reusing the
+backtester's fill/cost/leverage model. Draw on the chart, write text notes, and record voice
+notes explaining each trade.
+
+Every action is recorded to `replayer/sessions/<id>/`:
+
+- `meta.json` — trader name + config
+- `events.jsonl` — every action (clock, orders, fills, drawings, notes) with wall + market timestamps
+- `audio/*.webm` — voice notes
+
+Browser: use Chrome (voice capture uses MediaRecorder).
