@@ -49,3 +49,22 @@ def test_audio_upload(tmp_path, monkeypatch):
     assert r.status_code == 200
     aid = r.json()["audio_id"]
     assert (tmp_path / sid / "audio" / f"{aid}.webm").exists()
+
+
+def test_ws_step_order_and_logging(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    sid = client.post("/api/sessions", json={"trader": "a", "config": {"spread": 0}}).json()["session_id"]
+    with client.websocket_connect(f"/ws/{sid}") as wsconn:
+        wsconn.send_json({"kind": "control", "action": "step"})
+        m = wsconn.receive_json()
+        assert m["type"] == "bar"
+        wsconn.receive_json()  # account
+        wsconn.send_json({"kind": "order", "data": {"client_id": "o1", "side": "buy",
+                                                    "order_type": "market", "qty_lots": 1.0}})
+        got = [wsconn.receive_json() for _ in range(2)]
+        assert any(x.get("type") == "fill" for x in got)
+        wsconn.send_json({"kind": "note_text", "data": {"text": "why"}})
+    import json as J
+    lines = (tmp_path / sid / "events.jsonl").read_text().strip().splitlines()
+    types = [J.loads(x)["type"] for x in lines]
+    assert "order_submit" in types and "fill" in types and "note_text" in types
