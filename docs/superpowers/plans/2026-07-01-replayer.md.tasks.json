@@ -17,63 +17,63 @@
     {
       "id": 3,
       "subject": "Task 3: Live broker / matching (matching.py)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "Incremental market/limit/stop fills, SL/TP intrabar (reuse engine), leverage cap, MTM, margin stop.\n\n```json:metadata\n{\"files\": [\"replayer/models.py\", \"replayer/matching.py\", \"tests/test_replayer_matching.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_replayer_matching.py -v\", \"acceptanceCriteria\": [\"market fill at current price\", \"buy-limit on touch\", \"buy-stop on cross\", \"SL/TP intrabar\", \"leverage cap\", \"margin stop\", \"structured events\"]}\n```"
     },
     {
       "id": 4,
       "subject": "Task 4: Session recording (session.py)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "Session lifecycle: meta.json, append-only events.jsonl (seq + wall/market ts), audio store.\n\n```json:metadata\n{\"files\": [\"replayer/session.py\", \"tests/test_replayer_session.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_replayer_session.py -v\", \"acceptanceCriteria\": [\"create writes meta+jsonl\", \"log appends seq/wall/market/type/data\", \"seq monotonic\", \"save_audio writes file\", \"load reopens for append\"]}\n```"
     },
     {
       "id": 5,
       "subject": "Task 5: REST endpoints (session, candles, audio)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [2, 4],
       "description": "Wire Session + MarketFeed into FastAPI: create session, serve candles, accept audio uploads.\n\n```json:metadata\n{\"files\": [\"replayer/server.py\", \"tests/test_replayer_server.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_replayer_server.py -v\", \"acceptanceCriteria\": [\"POST /api/sessions returns id + creates dir\", \"GET candles returns m1 list\", \"POST audio saves clip + logs note_audio\"]}\n```"
     },
     {
       "id": 6,
       "subject": "Task 6: WebSocket live loop (clock+matching+broadcast)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [3, 5],
       "description": "WS drives authoritative replay: control/order/draw/note in; advance clock; broker per bar; log; stream out.\n\n```json:metadata\n{\"files\": [\"replayer/engine_loop.py\", \"replayer/server.py\", \"tests/test_replayer_server.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_replayer_server.py -v\", \"acceptanceCriteria\": [\"/ws/{sid} binds ReplaySession\", \"control:step advances one bar\", \"order fills stream+log\", \"draw/note/tf/indicator logged\", \"play/pause/seek\", \"state changes in jsonl\"]}\n```"
     },
     {
       "id": 7,
       "subject": "Task 7: Frontend chart + resample",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "Frontend shell + KLineChart render + in-browser m1->TF resampler (live forming candle). Node-tested resample.\n\n```json:metadata\n{\"files\": [\"replayer/static/index.html\", \"replayer/static/css/style.css\", \"replayer/static/js/resample.js\", \"replayer/static/js/chart.js\", \"tests/js/resample.test.mjs\"], \"verifyCommand\": \"node --test tests/js/resample.test.mjs\", \"acceptanceCriteria\": [\"resample buckets by TF, last=forming\", \"node test passes\", \"chart renders history + TF selector\"]}\n```"
     },
     {
       "id": 8,
       "subject": "Task 8: Frontend WS client + clock controls",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [6, 7],
       "description": "Connect WS, dispatch inbound to chart/panels, wire play/pause/speed/step/skip-gap + TF selector. app.js bootstrap.\n\n```json:metadata\n{\"files\": [\"replayer/static/js/ws.js\", \"replayer/static/js/clock.js\", \"replayer/static/js/app.js\"], \"verifyCommand\": \"manual: bash scripts/run_replayer.sh then open http://localhost:8502\", \"acceptanceCriteria\": [\"bootstrap session+candles+ws\", \"control buttons + clock_state\", \"bar appends, account updates\", \"TF switch sends tf_change\"]}\n```"
     },
     {
       "id": 9,
       "subject": "Task 9: Frontend trade panel",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [8],
       "description": "Order ticket (market/limit/stop, qty, SL/TP) + account/orders/position/blotter panels. Sends order/cancel/close_position.\n\n```json:metadata\n{\"files\": [\"replayer/static/js/trade.js\"], \"verifyCommand\": \"manual: place order in browser\", \"acceptanceCriteria\": [\"ticket sends order w/ unique client_id\", \"buy/sell market; limit/stop price field\", \"account shows balance/equity/position + Close\", \"working orders w/ Cancel\", \"blotter\"]}\n```"
     },
     {
       "id": 10,
       "subject": "Task 10: Frontend drawing capture + notes (text+voice)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [8],
       "description": "Capture KLineChart overlays as draw events; text-note box (note_text); voice recorder (MediaRecorder -> POST audio -> note_audio).\n\n```json:metadata\n{\"files\": [\"replayer/static/js/drawing.js\", \"replayer/static/js/notes.js\", \"replayer/static/js/app.js\"], \"verifyCommand\": \"manual: draw+note+record then inspect events.jsonl\", \"acceptanceCriteria\": [\"overlay changes send draw w/ points\", \"text box sends note_text\", \"record uploads audio + logs note_audio\", \"all appear in jsonl\"]}\n```"
     },
     {
       "id": 11,
       "subject": "Task 11: Run script, Playwright smoke, docs",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [9, 10],
       "description": "Launch script, end-to-end Playwright smoke (marked) exercising the record loop, README section.\n\n```json:metadata\n{\"files\": [\"scripts/run_replayer.sh\", \"tests/test_replayer_smoke.py\", \"README.md\", \"conftest.py\"], \"verifyCommand\": \".venv/bin/python -m pytest -q\", \"acceptanceCriteria\": [\"run script starts uvicorn 8502\", \"smoke plays+orders+draws+notes and asserts jsonl grew\", \"README documents run + recordings\"]}\n```"
     }
