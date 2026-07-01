@@ -77,6 +77,10 @@ class LiveBroker:
                                                  "side": req.side, "order_type": req.order_type,
                                                  "qty_lots": req.qty_lots})
 
+    def mark(self, bar):
+        """Set the current price context (used on seek so a market order prices correctly)."""
+        self._bar = bar
+
     def cancel(self, client_id: str) -> BrokerEvent:
         ts = self._bar["t"] if self._bar else 0
         self.orders = [o for o in self.orders if o.client_id != client_id]

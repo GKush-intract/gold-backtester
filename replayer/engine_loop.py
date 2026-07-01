@@ -84,7 +84,12 @@ class ReplaySession:
             self.session.log("clock", {"action": "step"}, market_ts=market_ts)
             return self.tick()
         if action == "seek":
+            # seek is chart/clock navigation only: it does NOT rewind an open position or
+            # working orders (acceptable for step 1). It only re-marks the broker price.
             self.feed.seek(int(msg["to"]))
+            peek = self.feed.peek()
+            if peek is not None:
+                self.broker.mark(peek)
             self.session.log("clock", {"action": "seek", "to": int(msg["to"])}, market_ts=int(msg["to"]))
             return [{"type": "seeked", "to": int(msg["to"])}, self._account_msg()]
         if action == "skip_gap":

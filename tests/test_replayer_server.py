@@ -68,3 +68,35 @@ def test_ws_step_order_and_logging(tmp_path, monkeypatch):
     lines = (tmp_path / sid / "events.jsonl").read_text().strip().splitlines()
     types = [J.loads(x)["type"] for x in lines]
     assert "order_submit" in types and "fill" in types and "note_text" in types
+
+
+def test_ws_play_reaches_end(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    sid = client.post("/api/sessions", json={"trader": "a", "config": {"spread": 0}}).json()["session_id"]
+    with client.websocket_connect(f"/ws/{sid}") as wsconn:
+        wsconn.send_json({"kind": "control", "action": "play", "speed": 1})
+        bars, terminal = 0, None
+        for _ in range(60):
+            m = wsconn.receive_json()
+            if m["type"] == "bar":
+                bars += 1
+            if m["type"] == "clock_state" and m.get("at_end"):
+                terminal = m
+                break
+        assert bars == 3
+        assert terminal is not None and terminal["playing"] is False
+
+
+def test_ws_seek_marks_price_for_market_order(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    sid = client.post("/api/sessions", json={"trader": "a", "config": {"spread": 0}}).json()["session_id"]
+    first_ts = client.get(f"/api/sessions/{sid}/candles").json()["candles"][0]["t"]
+    with client.websocket_connect(f"/ws/{sid}") as wsconn:
+        wsconn.send_json({"kind": "control", "action": "seek", "to": first_ts})
+        wsconn.receive_json()  # seeked
+        wsconn.receive_json()  # account
+        wsconn.send_json({"kind": "order", "data": {"client_id": "o1", "side": "buy",
+                                                    "order_type": "market", "qty_lots": 1.0}})
+        got = [wsconn.receive_json() for _ in range(2)]
+        fill = [x for x in got if x.get("type") == "fill"]
+        assert fill and fill[0]["data"]["fill_price"] == 2000.5   # priced off seeked bar, not 0.0

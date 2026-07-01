@@ -103,24 +103,42 @@ async def ws(websocket: WebSocket, sid: str):
     meta = _json.loads((session.dir / "meta.json").read_text())
     rs = ReplaySession(session, MarketFeed(_feed_frame()), _cfg_from(meta.get("config", {})))
 
+    send_lock = asyncio.Lock()
+
+    async def send(m):
+        async with send_lock:
+            await websocket.send_json(m)
+
     async def play_loop():
-        while True:
-            if rs.playing and not rs.feed.at_end:
-                for _ in range(max(1, rs.speed // 10)):
-                    if not rs.playing or rs.feed.at_end:
-                        break
+        try:
+            while True:
+                if rs.playing and not rs.feed.at_end:
+                    for _ in range(max(1, rs.speed // 10)):
+                        if not rs.playing or rs.feed.at_end:
+                            break
+                        for m in rs.tick():
+                            await send(m)
+                    await asyncio.sleep(0.05)
+                elif rs.playing and rs.feed.at_end:
+                    # last bar consumed: tick() flips playing off, logs clock/end, and emits the
+                    # terminal clock_state{at_end:true}; the next iteration then idles (no spin).
                     for m in rs.tick():
-                        await websocket.send_json(m)
-                await asyncio.sleep(0.05)
-            else:
-                await asyncio.sleep(0.05)
+                        await send(m)
+                else:
+                    await asyncio.sleep(0.05)
+        except Exception as e:  # never freeze auto-advance silently
+            session.log("error", {"where": "play_loop", "msg": str(e)}, market_ts=None)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
 
     loop_task = asyncio.create_task(play_loop())
     try:
         while True:
             msg = await websocket.receive_json()
             for out in rs.handle(msg):
-                await websocket.send_json(out)
+                await send(out)
     except WebSocketDisconnect:
         pass
     finally:
