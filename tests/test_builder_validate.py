@@ -83,7 +83,7 @@ def test_broken_strategy_fails(smoke_csv):
 def test_infinite_loop_times_out(smoke_csv):
     path = _write(LOOPS, "gen_validate_loops_test")
     try:
-        result = validate.validate_strategy(path, smoke_csv, bars=500, timeout=10)
+        result = validate.validate_strategy(path, smoke_csv, bars=500, timeout=4)
         assert not result["ok"]
         assert "infinite loop" in result["error"]
     finally:
@@ -120,3 +120,35 @@ def test_generate_validated_repairs_then_succeeds(smoke_csv):
         assert client.messages.create.call_count == 2
     finally:
         path.unlink()
+
+
+def test_generate_validated_all_attempts_fail(smoke_csv):
+    client = MagicMock()
+
+    def fake_create(**kwargs):
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=f"```python\n{BROKEN}\n```")],
+            stop_reason="end_turn")
+
+    client.messages.create.side_effect = fake_create
+    path, result, code = validate.generate_validated(
+        client, {"name": "Always Broken", "parameters": []},
+        csv_path=smoke_csv, bars=500, max_attempts=2)
+    try:
+        assert not result["ok"]
+        # initial generate + 1 repair (no repair after the final failed validation)
+        assert client.messages.create.call_count == 2
+    finally:
+        path.unlink()
+
+
+def test_generate_validated_truncated_generation(smoke_csv):
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="```python\npartial")],
+        stop_reason="max_tokens")
+    path, result, code = validate.generate_validated(
+        client, {"name": "Truncated", "parameters": []}, csv_path=smoke_csv, bars=500)
+    assert path is None
+    assert not result["ok"]
+    assert "truncated" in result["error"]
