@@ -96,11 +96,14 @@ def _main() -> None:
         from src import runner
         data = load_ohlc(csv_path)
 
-        # small run first (bars/4) to establish a per-bar baseline for the perf check
+        # small run first (bars/4) to establish a per-bar baseline for the perf
+        # check; best-of-two to keep scheduler noise from skewing the ratio
         small = data.tail(max(bars // 4, 50))
-        t0 = time.perf_counter()
-        runner.run_backtest(BacktestConfig(), cls(), small)
-        t_small = time.perf_counter() - t0
+        t_small = float("inf")
+        for _ in range(2):
+            t0 = time.perf_counter()
+            runner.run_backtest(BacktestConfig(), cls(), small)
+            t_small = min(t_small, time.perf_counter() - t0)
 
         full = data.tail(bars)
         t0 = time.perf_counter()

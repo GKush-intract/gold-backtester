@@ -163,8 +163,9 @@ class Quadratic(Strategy):
         # deliberately recompute over the FULL history each bar (O(n^2) overall)
         closes = ctx.history["close"].tolist()
         s = 0.0
-        for c in closes:
-            s += c * 1.0000001
+        for _ in range(3):
+            for c in closes:
+                s += c * 1.0000001
 '''
 
 
