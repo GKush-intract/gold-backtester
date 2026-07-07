@@ -2,8 +2,6 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.builder import interview
 
 
@@ -41,35 +39,54 @@ def test_get_client_returns_none_without_key(monkeypatch):
     assert interview.get_client() is None
 
 
-def test_turn_returns_text_only():
+def test_turn_returns_text_only_and_appends_assistant_turn():
     client = _mock_client([_text_block("What timeframe do you want?")])
-    text, spec, _ = interview.run_interview_turn(client, [{"role": "user", "content": "EFI strategy"}])
+    history = [{"role": "user", "content": "EFI strategy"}]
+    text, spec = interview.run_interview_turn(client, history)
     assert "timeframe" in text
     assert spec is None
+    assert history[-1] == {"role": "assistant", "content": "What timeframe do you want?"}
 
 
-def test_turn_returns_spec_on_tool_call():
+def test_turn_returns_spec_and_acks_tool_call():
     client = _mock_client([_text_block("Here is the spec."), _tool_block(VALID_SPEC)])
-    text, spec, raw = interview.run_interview_turn(client, [{"role": "user", "content": "done"}])
+    history = [{"role": "user", "content": "done"}]
+    text, spec = interview.run_interview_turn(client, history)
     assert spec["name"] == "EFI Pullback"
-    assert raw[1].type == "tool_use"  # raw content returned for ack_spec()
-    msgs = client.messages.create.call_args.kwargs["messages"]
-    assert msgs[-1]["role"] == "user"  # history passed through unchanged
+    assert history[-2]["role"] == "assistant"
+    assert history[-2]["content"][1]["type"] == "tool_use"
+    ack = history[-1]
+    assert ack["role"] == "user"
+    assert ack["content"][0]["type"] == "tool_result"
+    assert ack["content"][0]["tool_use_id"] == "tu_1"
+    assert "is_error" not in ack["content"][0]
+    # parallel tool use disabled on the request
+    assert client.messages.create.call_args.kwargs["tool_choice"] == {
+        "type": "auto", "disable_parallel_tool_use": True}
 
 
-def test_invalid_spec_rejected():
+def test_invalid_spec_rejected_with_error_tool_result():
     bad = {"name": "x"}  # missing required keys
     client = _mock_client([_tool_block(bad)])
-    text, spec, _ = interview.run_interview_turn(client, [{"role": "user", "content": "done"}])
+    history = [{"role": "user", "content": "done"}]
+    text, spec = interview.run_interview_turn(client, history)
     assert spec is None
     assert "missing" in text.lower()
+    err = history[-1]["content"][0]
+    assert err["type"] == "tool_result" and err["is_error"] is True
 
 
-def test_ack_spec_appends_tool_result():
-    history = [{"role": "user", "content": "done"}]
-    content = [_text_block("spec ready"), _tool_block(VALID_SPEC)]
-    interview.ack_spec(history, content)
-    assert history[-2]["role"] == "assistant"
-    assert history[-1]["role"] == "user"
-    assert history[-1]["content"][0]["type"] == "tool_result"
-    assert history[-1]["content"][0]["tool_use_id"] == "tu_1"
+def test_empty_parameters_list_is_valid():
+    spec_no_params = dict(VALID_SPEC, parameters=[])
+    client = _mock_client([_tool_block(spec_no_params)])
+    text, spec = interview.run_interview_turn(client, [{"role": "user", "content": "done"}])
+    assert spec is not None
+    assert spec["parameters"] == []
+
+
+def test_truncated_response_flagged():
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[_text_block("partial answer")], stop_reason="max_tokens")
+    text, spec = interview.run_interview_turn(client, [{"role": "user", "content": "hi"}])
+    assert "truncated" in text

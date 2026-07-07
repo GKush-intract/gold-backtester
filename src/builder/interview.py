@@ -89,6 +89,8 @@ user later asks for changes, ask what's needed and call finalize_spec again with
 revised spec.
 """
 
+_PARAM_KEYS = FINALIZE_SPEC_TOOL["input_schema"]["properties"]["parameters"]["items"]["required"]
+
 
 def get_client() -> Optional[anthropic.Anthropic]:
     """Client from ANTHROPIC_API_KEY, or None if the key is missing."""
@@ -98,48 +100,74 @@ def get_client() -> Optional[anthropic.Anthropic]:
 
 
 def _validate_spec(spec: dict) -> list[str]:
-    missing = [k for k in SPEC_REQUIRED_KEYS if not spec.get(k)]
-    for p in spec.get("parameters", []):
-        for k in ("name", "type", "default", "min", "max", "help"):
+    missing = []
+    for k in SPEC_REQUIRED_KEYS:
+        if k == "parameters":
+            if not isinstance(spec.get(k), list):
+                missing.append(k)
+        else:
+            if not spec.get(k):
+                missing.append(k)
+    for p in (spec.get("parameters", []) if isinstance(spec.get("parameters"), list) else []):
+        if not isinstance(p, dict):
+            missing.append("parameters[] must be objects")
+            continue
+        for k in _PARAM_KEYS:
             if k not in p:
                 missing.append(f"parameters[].{k}")
     return missing
 
 
-def run_interview_turn(client, messages: list, model: str = DEFAULT_MODEL):
-    """One assistant turn. Returns (text, spec_or_None, raw_content). `messages` is the
-    raw Anthropic-format history; when spec is not None the caller must pass raw_content
-    to ack_spec() so the tool call is answered before the next turn."""
+def run_interview_turn(client, messages: list, model: str = DEFAULT_MODEL) -> tuple[str, dict | None]:
+    """One assistant turn. Appends the assistant turn (and tool_result answers for any
+    tool calls) to `messages` itself — callers only append user turns. Returns
+    (display_text, spec_or_None)."""
     response = client.messages.create(
         model=model,
         max_tokens=4096,
         system=SYSTEM_PROMPT,
         tools=[FINALIZE_SPEC_TOOL],
+        tool_choice={"type": "auto", "disable_parallel_tool_use": True},
         messages=messages,
     )
     text = "".join(b.text for b in response.content if b.type == "text")
-    spec = next((b.input for b in response.content
-                 if b.type == "tool_use" and b.name == "finalize_spec"), None)
-    if spec is not None:
-        missing = _validate_spec(spec)
-        if missing:
-            return (text + f"\n\n(Spec rejected — missing fields: {', '.join(missing)}. "
-                    "Please continue the conversation to fill them in.)"), None, response.content
-        return text, dict(spec), response.content
-    return text, None, response.content
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        text += "\n\n(Response was truncated — say 'continue' to let me finish.)"
 
-
-def ack_spec(messages: list, response_content) -> None:
-    """Append the assistant tool-call turn + a tool_result ack so the chat can continue."""
-    blocks = []
-    for b in response_content:
+    assistant_blocks = []
+    tool_uses = []
+    for b in response.content:
         if b.type == "text":
-            blocks.append({"type": "text", "text": b.text})
+            assistant_blocks.append({"type": "text", "text": b.text})
         elif b.type == "tool_use":
-            blocks.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
-    messages.append({"role": "assistant", "content": blocks})
-    tool_use_id = next(b.id for b in response_content if b.type == "tool_use")
-    messages.append({"role": "user", "content": [{
-        "type": "tool_result", "tool_use_id": tool_use_id,
-        "content": "Spec recorded and shown to the user as a card.",
-    }]})
+            assistant_blocks.append({"type": "tool_use", "id": b.id, "name": b.name,
+                                     "input": b.input})
+            tool_uses.append(b)
+
+    if not tool_uses:
+        if text:
+            messages.append({"role": "assistant", "content": text})
+        return text, None
+
+    messages.append({"role": "assistant", "content": assistant_blocks})
+
+    spec = None
+    results = []
+    for i, tu in enumerate(tool_uses):
+        if tu.name != "finalize_spec" or i > 0:
+            results.append({"type": "tool_result", "tool_use_id": tu.id, "is_error": True,
+                            "content": "Ignored — only one finalize_spec call per turn."})
+            continue
+        missing = _validate_spec(tu.input)
+        if missing:
+            results.append({"type": "tool_result", "tool_use_id": tu.id, "is_error": True,
+                            "content": f"Spec rejected — missing/invalid fields: "
+                                       f"{', '.join(missing)}. Ask the user for these."})
+            text += (f"\n\n(Spec rejected — missing fields: {', '.join(missing)}. "
+                     "Please continue the conversation to fill them in.)")
+        else:
+            spec = dict(tu.input)
+            results.append({"type": "tool_result", "tool_use_id": tu.id,
+                            "content": "Spec recorded and shown to the user as a card."})
+    messages.append({"role": "user", "content": results})
+    return text, spec
