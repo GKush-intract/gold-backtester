@@ -103,3 +103,22 @@ Every action is recorded to `replayer/sessions/<id>/`:
 - `audio/*.webm` — voice notes
 
 Browser: use Chrome (voice capture uses MediaRecorder).
+
+## Strategy Builder (natural language)
+
+Describe a strategy in plain English and let Claude turn it into runnable code.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+streamlit run app.py     # open the "Strategy Builder" page in the sidebar
+```
+
+Flow: chat interview (buy/sell conditions, TP/SL, risk management, indicator
+settings) → confirm the spec card → code is generated, validated in a sandboxed
+subprocess (auto-repaired up to 3×), and backtested on your XAUUSD data.
+Every tunable is a `params` entry, so you fine-tune in the sidebar with **no
+further API calls**; logic changes go through the chat and update the same file
+(with automatic rollback to the last working version if a revision fails).
+
+Generated strategies persist in `src/strategies/generated/` and automatically
+appear in the classic backtester's strategy dropdown. Delete a file to remove it.
