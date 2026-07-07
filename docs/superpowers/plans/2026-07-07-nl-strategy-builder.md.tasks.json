@@ -1,0 +1,53 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-07-nl-strategy-builder.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Generated-strategies package + registry discovery",
+      "status": "pending",
+      "description": "**Goal:** src/strategies/generated/ package exists and get_strategy_registry() discovers Strategy subclasses in it.\n\n```json:metadata\n{\"files\": [\"src/strategies/generated/__init__.py\", \"src/strategies/__init__.py\", \"tests/test_generated_registry.py\", \"requirements.txt\"], \"verifyCommand\": \"pytest tests/test_generated_registry.py tests/test_strategy.py -v\", \"acceptanceCriteria\": [\"generated/ files auto-discovered\", \"existing strategies still discovered\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Extract shared rendering into src/ui_results.py",
+      "status": "pending",
+      "description": "**Goal:** Move app.py results block + param-widget loop into src/ui_results.py (render_results, render_param_inputs), behavior-preserving.\n\n```json:metadata\n{\"files\": [\"src/ui_results.py\", \"app.py\"], \"verifyCommand\": \"pytest -x -q\", \"acceptanceCriteria\": [\"behavior-preserving refactor\", \"functions importable\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Interview module (src/builder/interview.py)",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Anthropic chat-turn handler with engine-aware system prompt + finalize_spec tool schema; spec validation; ack_spec helper.\n\n```json:metadata\n{\"files\": [\"src/builder/__init__.py\", \"src/builder/interview.py\", \"tests/test_builder_interview.py\"], \"verifyCommand\": \"pytest tests/test_builder_interview.py -v\", \"acceptanceCriteria\": [\"client gated on env key\", \"spec via forced tool schema\", \"spec validation\", \"mocked tests\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Codegen module (src/builder/codegen.py)",
+      "status": "pending",
+      "blockedBy": [1, 3],
+      "description": "**Goal:** Codegen/revision/repair prompts embedding strategy.py + ma_crossover.py; extract_code; strategy_filename/write_strategy_file; load_strategy_class.\n\n```json:metadata\n{\"files\": [\"src/builder/codegen.py\", \"tests/test_builder_codegen.py\"], \"verifyCommand\": \"pytest tests/test_builder_codegen.py -v\", \"acceptanceCriteria\": [\"code extraction robust\", \"file naming/writing\", \"class loading\", \"contract embedded in system prompt\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Validation subprocess + repair loop (src/builder/validate.py)",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** python -m src.builder.validate subprocess (ast → import → smoke backtest, RESULT_JSON sentinel, 60s timeout) + generate_validated repair loop (max 3 attempts, same file overwritten).\n\n```json:metadata\n{\"files\": [\"src/builder/validate.py\", \"tests/test_builder_validate.py\"], \"verifyCommand\": \"pytest tests/test_builder_validate.py -v\", \"acceptanceCriteria\": [\"subprocess isolation with timeout\", \"smoke backtest\", \"repair loop max 3\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Strategy Builder page (pages/1_Strategy_Builder.py)",
+      "status": "pending",
+      "blockedBy": [2, 5],
+      "description": "**Goal:** Chat page: interview → spec card → generate/validate/repair → auto backtest → sidebar param fine-tune → chat logic revisions. API-key gate, code expander, typed API error handling.\n\n```json:metadata\n{\"files\": [\"pages/1_Strategy_Builder.py\", \"tests/test_builder_page.py\"], \"verifyCommand\": \"pytest tests/test_builder_page.py -v\", \"acceptanceCriteria\": [\"key gate\", \"spec card + generate\", \"param tier no API\", \"chat revision tier\", \"error handling\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Docs + full-suite verification",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** README section for the Strategy Builder; full pytest suite green.\n\n```json:metadata\n{\"files\": [\"README.md\"], \"verifyCommand\": \"pytest -q\", \"acceptanceCriteria\": [\"README section\", \"full suite green\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-07T10:55:00+05:30"
+}
