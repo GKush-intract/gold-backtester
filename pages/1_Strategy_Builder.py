@@ -8,7 +8,9 @@ import streamlit as st
 
 from src import runner
 from src.builder import interview
-from src.builder.codegen import load_strategy_class, repair_strategy, revise_strategy, write_strategy_file
+from src.builder.codegen import (GENERATED_DIR, load_spec, load_strategy_class,
+                                 repair_strategy, revise_strategy, save_spec,
+                                 write_strategy_file)
 from src.builder.validate import DEFAULT_CSV, generate_validated, validate_strategy
 from src.data_loader import load_ohlc, resample
 from src.engine import BacktestConfig
@@ -52,6 +54,24 @@ with st.sidebar:
     balance = st.number_input("Opening balance", 100.0, 1e9, 10_000.0, step=1000.0)
     spread = st.number_input("Spread (price units)", 0.0, 10.0, 0.30)
     max_leverage = st.number_input("Max leverage (×)", 0.0, 500.0, 20.0)
+
+    gen_files = sorted(f.name for f in GENERATED_DIR.glob("gen_*.py"))
+    if gen_files:
+        st.header("Strategy file")
+        sel = st.selectbox("Load existing strategy", ["(current session)"] + gen_files)
+        if sel != "(current session)" and st.button("📂 Load for editing"):
+            lpath = GENERATED_DIR / sel
+            try:
+                lcls = load_strategy_class(lpath)
+                ss.b_path = lpath
+                ss.b_code = lpath.read_text()
+                ss.b_spec = load_spec(lpath) or {"name": lcls.name}
+                ss.b_display.append(("assistant",
+                    f"Loaded `{sel}` (**{lcls.name}**). Chat below to revise it with AI, "
+                    "or tune its parameters here and hit Run."))
+                st.rerun()
+            except Exception as e:
+                st.warning(f"Could not load {sel}: {e}")
 
     param_values = {}
     strat_cls = None
@@ -121,6 +141,7 @@ if ss.b_spec is not None and ss.b_path is None:
                 ss.b_code = code
                 if result["ok"]:
                     ss.b_path = path
+                    save_spec(path, spec)  # sidecar lets future sessions reload intent
                     if result.get("warning"):
                         st.warning(result["warning"])
                     status.update(label=f"✅ {path.name} validated "

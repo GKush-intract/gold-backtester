@@ -99,3 +99,17 @@ def test_truncated_response_raises():
         content=[SimpleNamespace(type="text", text="```python\npartial")], stop_reason="max_tokens")
     with pytest.raises(ValueError, match="truncated"):
         codegen.generate_strategy(client, {"name": "x", "parameters": []})
+
+
+def test_spec_sidecar_roundtrip(tmp_path):
+    path = tmp_path / "gen_x.py"
+    codegen.save_spec(path, {"name": "X", "parameters": []})
+    assert codegen.spec_sidecar_path(path) == tmp_path / "gen_x.spec.json"
+    assert codegen.load_spec(path) == {"name": "X", "parameters": []}
+
+
+def test_load_spec_missing_or_corrupt(tmp_path):
+    assert codegen.load_spec(tmp_path / "gen_missing.py") is None
+    bad = tmp_path / "gen_bad.py"
+    codegen.spec_sidecar_path(bad).write_text("not json{")
+    assert codegen.load_spec(bad) is None

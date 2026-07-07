@@ -89,6 +89,28 @@ def write_strategy_file(code: str, name: str, path: Optional[Path] = None) -> Pa
     return path
 
 
+def spec_sidecar_path(path: Path) -> Path:
+    return path.with_suffix(".spec.json")
+
+
+def save_spec(path: Path, spec: dict) -> None:
+    """Persist the confirmed spec next to the strategy file so future sessions
+    can reload the strategy's intent without re-interviewing."""
+    spec_sidecar_path(path).write_text(json.dumps(spec, indent=2))
+
+
+def load_spec(path: Path) -> Optional[dict]:
+    """The sidecar spec for a generated strategy, or None if absent/corrupt."""
+    sidecar = spec_sidecar_path(path)
+    if sidecar.exists():
+        try:
+            parsed = json.loads(sidecar.read_text())
+            return parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            return None
+    return None
+
+
 def load_strategy_class(path: Path):
     """Import (or reload) the generated module and return its Strategy subclass."""
     importlib.invalidate_caches()
