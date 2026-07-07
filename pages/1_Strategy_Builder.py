@@ -63,6 +63,7 @@ with st.sidebar:
             if st.button("▶ Run backtest", type="primary"):
                 ss.b_run_requested = True
         except Exception as e:  # file mid-repair or deleted
+            ss.b_run_requested = False
             st.warning(f"Strategy not loadable yet: {e}")
 
 
@@ -141,6 +142,14 @@ if ss.b_run_requested and ss.b_path is not None and strat_cls is not None:
     with st.spinner("Backtesting…"):
         run_backtest_now()
 
+def _pop_dangling_turn(prompt: str) -> None:
+    """Undo the just-appended user turn after an API failure so resending doesn't duplicate it."""
+    if ss.b_messages and ss.b_messages[-1] == {"role": "user", "content": prompt}:
+        ss.b_messages.pop()
+    if ss.b_display and ss.b_display[-1] == ("user", prompt):
+        ss.b_display.pop()
+
+
 # ---------------- Chat input ----------------
 placeholder = ("Describe your strategy (e.g. 'Buy when Elder Force Index turns positive…')"
                if ss.b_spec is None else
@@ -163,36 +172,52 @@ if prompt := st.chat_input(placeholder):
                 ss.b_display.append(("assistant", text))
             st.rerun()
         else:
-            # logic-revision mode: current file + request -> full new file -> validate/repair
-            with st.status("Revising strategy…", expanded=True) as status:
-                st.write("Asking Claude for the updated file…")
-                code = revise_strategy(client, ss.b_code, prompt, model=model)
-                write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
-                st.write("Validating…")
-                result = validate_strategy(ss.b_path, csv_path=_csv_path())
-                attempts = 1
-                while not result["ok"] and attempts < 3:
-                    st.write("Validation failed — asking Claude to fix it…")
-                    code = repair_strategy(client, code, result["error"], model=model)
+            # logic-revision mode: current file + request -> full new file -> validate/repair.
+            # On any failure the previous working version is restored (disk + session).
+            old_code = ss.b_code
+            ok = False
+            try:
+                with st.status("Revising strategy…", expanded=True) as status:
+                    st.write("Asking Claude for the updated file…")
+                    code = revise_strategy(client, ss.b_code, prompt, model=model)
                     write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
+                    st.write("Validating…")
                     result = validate_strategy(ss.b_path, csv_path=_csv_path())
-                    attempts += 1
-                ss.b_code = code
-                if result["ok"]:
-                    status.update(label="✅ Revision validated", state="complete")
-                    ss.b_display.append(("assistant", "Updated the strategy — re-running the backtest."))
-                    ss.b_run_requested = True
-                else:
-                    status.update(label="❌ Revision failed validation", state="error")
-                    st.code(result["error"] or "unknown error")
-                    ss.b_display.append(("assistant", "The revision failed validation — see the "
-                                                      "error above. Tell me how to proceed."))
+                    attempts = 1
+                    while not result["ok"] and attempts < 3:
+                        st.write("Validation failed — asking Claude to fix it…")
+                        code = repair_strategy(client, code, result["error"], model=model)
+                        write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
+                        result = validate_strategy(ss.b_path, csv_path=_csv_path())
+                        attempts += 1
+                    ok = result["ok"]
+                    if ok:
+                        ss.b_code = code
+                        status.update(label="✅ Revision validated", state="complete")
+                        ss.b_display.append(("assistant",
+                                             "Updated the strategy — re-running the backtest."))
+                        ss.b_run_requested = True
+                    else:
+                        status.update(label="❌ Revision failed — previous version restored",
+                                      state="error")
+                        ss.b_display.append(("assistant",
+                            "That revision failed validation, so I restored the previous "
+                            "working version. Last error:\n```\n"
+                            + (result["error"] or "unknown")[-1500:] + "\n```"))
+            finally:
+                if not ok:
+                    # roll back the session file so the working strategy is never lost
+                    write_strategy_file(old_code, ss.b_spec["name"], path=ss.b_path)
             st.rerun()
     except anthropic.RateLimitError:
+        _pop_dangling_turn(prompt)
         st.error("Rate limited by the API — wait a moment and resend your message.")
     except anthropic.APIStatusError as e:
+        _pop_dangling_turn(prompt)
         st.error(f"Claude API error ({e.status_code}) — resend to retry.")
     except anthropic.APIConnectionError:
+        _pop_dangling_turn(prompt)
         st.error("Network error reaching the Claude API — check your connection and resend.")
     except ValueError as e:
+        _pop_dangling_turn(prompt)
         st.error(f"Code generation problem: {e}")
