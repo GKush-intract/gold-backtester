@@ -53,6 +53,13 @@ You write Python strategy files for a gold (XAUUSD) backtesting engine.
            hist = hist.iloc[-tail:]
    then compute indicators on that slice only. Validation rejects super-linear strategies.
    No prints, no file/network access.
+9. Stops must sit a MEANINGFUL distance from the fill. Entries fill at the NEXT bar open
+   plus half the spread, so a stop placed at the signal level itself (e.g. at the EMA the
+   price just crossed) often ends up inside the spread -> microscopic initial risk ->
+   oversized positions and absurd R multiples (-100R). Always enforce a minimum stop
+   distance, e.g.:
+       min_stop = min_stop_atr_mult * atr          # expose min_stop_atr_mult as a param
+       stop = min(level, price - min_stop)          # long entry (max(...) for shorts)
 """
 
 

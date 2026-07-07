@@ -43,9 +43,8 @@ with st.sidebar:
     files = sorted(p.name for p in Path("data/raw").glob("*.csv"))
     default_ix = files.index(DEFAULT_CSV.name) if DEFAULT_CSV.name in files else 0
     csv_name = st.selectbox("CSV file", files, index=default_ix) if files else None
-    today = dt.date.today()
-    start = st.date_input("Start", today - dt.timedelta(days=730))
-    end = st.date_input("End", today)
+    start = st.date_input("Start", dt.date(2026, 1, 1))
+    end = st.date_input("End", dt.date(2026, 3, 31))
     resample_to = st.selectbox("Resample to (optional)",
                                ["(none)", "m5", "m15", "m30", "h1", "h4"], index=0)
 
