@@ -128,6 +128,8 @@ if ss.b_spec is not None and ss.b_path is None:
                     ss.b_run_requested = True
                     st.rerun()
                 else:
+                    if path is not None:
+                        path.unlink(missing_ok=True)  # don't accumulate broken gen_*.py files
                     status.update(label="❌ Validation failed", state="error")
                     st.code(result["error"] or "unknown error")
                     st.info("Keep chatting below to revise the spec, then generate again.")

@@ -43,7 +43,7 @@ GENERATED_DIR = Path(__file__).parent.parent / "src" / "strategies" / "generated
 FIXTURE = '''\
 from __future__ import annotations
 
-from ..strategy import Strategy
+from ...strategy import Strategy
 
 
 class RegistryProbe(Strategy):
@@ -93,13 +93,20 @@ def get_strategy_registry() -> dict[str, type]:
     Adding a strategy file here requires zero changes elsewhere."""
     registry: dict[str, type] = {}
     pkg_dir = Path(__file__).parent
-    scan = [(str(pkg_dir), _PACKAGE), (str(pkg_dir / "generated"), f"{_PACKAGE}.generated")]
-    for path, pkg in scan:
+    scan = [(str(pkg_dir), _PACKAGE, False),
+            (str(pkg_dir / "generated"), f"{_PACKAGE}.generated", True)]
+    for path, pkg, is_generated in scan:
         for mod in pkgutil.iter_modules([path]):
             if mod.name.startswith("_"):
                 continue
-            module = importlib.import_module(f"{pkg}.{mod.name}")
-            module = importlib.reload(module)  # generated files change during a session
+            try:
+                module = importlib.import_module(f"{pkg}.{mod.name}")
+                if is_generated:  # generated files change during a session
+                    module = importlib.reload(module)
+            except Exception:
+                if not is_generated:
+                    raise
+                continue  # one broken generated file must not brick the app
             for _, obj in inspect.getmembers(module, inspect.isclass):
                 if issubclass(obj, Strategy) and obj is not Strategy and obj.__module__ == module.__name__:
                     registry[obj.name] = obj
@@ -570,7 +577,7 @@ from src.builder import codegen
 GOOD_CODE = '''\
 from __future__ import annotations
 
-from ..strategy import Strategy
+from ...strategy import Strategy
 
 
 class TempGen(Strategy):
@@ -682,7 +689,8 @@ You write Python strategy files for a gold (XAUUSD) backtesting engine.
 5. Sizing: use ctx.size_for_risk(risk_pct, entry, stop) unless the spec says otherwise.
 6. If the spec needs higher timeframes, set `htf_timeframes = ["h1", ...]` and read ctx.htf["h1"]
    (a resampled OHLCV DataFrame; only use rows with index <= ctx.bar["time"]).
-7. Imports allowed: stdlib, numpy, pandas, and `from ..strategy import Strategy`.
+7. Imports allowed: stdlib, numpy, pandas, and `from ...strategy import Strategy`
+   (THREE dots — the file lives in src/strategies/generated/, two levels below src/).
 8. Keep on_bar fast: O(lookback) per bar, no prints, no file/network access.
 """
 
@@ -800,7 +808,7 @@ from src.builder import codegen, validate
 
 GOOD = '''\
 from __future__ import annotations
-from ..strategy import Strategy
+from ...strategy import Strategy
 
 class ValidateOK(Strategy):
     name = "Validate OK"
@@ -811,10 +819,10 @@ class ValidateOK(Strategy):
             ctx.enter("long", 0.01, stop_loss=price - 5, take_profit=price + 5)
 '''
 
-BROKEN = "from ..strategy import Strategy\nclass Broken(Strategy):\n    name = undefined_name\n"
+BROKEN = "from ...strategy import Strategy\nclass Broken(Strategy):\n    name = undefined_name\n"
 
 LOOPS = '''\
-from ..strategy import Strategy
+from ...strategy import Strategy
 class Loops(Strategy):
     name = "Loops"
     def on_bar(self, ctx):
@@ -823,7 +831,7 @@ class Loops(Strategy):
 '''
 
 NO_TRADES = '''\
-from ..strategy import Strategy
+from ...strategy import Strategy
 class NoTrades(Strategy):
     name = "No Trades"
     def on_bar(self, ctx):
@@ -1232,15 +1240,13 @@ if prompt := st.chat_input(placeholder):
 
     try:
         if ss.b_path is None:
-            # interview / spec-revision mode
+            # interview / spec-revision mode. run_interview_turn owns ALL history
+            # mutation (assistant turn + tool_result acks) — only append user turns.
             ss.b_messages.append({"role": "user", "content": prompt})
             with st.spinner("Thinking…"):
-                text, spec, raw = interview.run_interview_turn(client, ss.b_messages, model=model)
+                text, spec = interview.run_interview_turn(client, ss.b_messages, model=model)
             if spec is not None:
-                interview.ack_spec(ss.b_messages, raw)
                 ss.b_spec = spec
-            else:
-                ss.b_messages.append({"role": "assistant", "content": text or "(spec updated)"})
             if text:
                 ss.b_display.append(("assistant", text))
             st.rerun()
@@ -1357,6 +1363,6 @@ git commit -m "docs: natural-language Strategy Builder usage"
 ## Self-Review Notes
 
 - Spec coverage: registry scan (T1), ui_results refactor (T2), interview+spec gate (T3), codegen/naming/revision (T4), subprocess validation + repair loop + 0-trade warning + timeout (T5), page with API-key gate, spec card, auto-run, param tier, chat revision tier, error handling (T6), README (T7). All spec sections mapped.
-- Type consistency: `run_interview_turn` returns `(text, spec, raw_content)` (3-tuple — Task 3 Step 3 note); page unpacks 3 values; interview tests unpack `text, spec, _`.
+- Type consistency (REVISED after Task 3 code review): `run_interview_turn` returns `(text, spec_or_None)` and is the sole mutator of the message history — it appends the assistant turn and answers every tool_use with a tool_result (ack, or is_error for rejected/duplicate calls). `ack_spec` no longer exists. Callers only append user turns.
 - `validate_strategy` result shape `{ok, error, num_trades, warning}` used consistently in T5 and T6.
 - `write_strategy_file(code, name, path=...)` overwrite form used by both the repair loop and the page revision flow.
