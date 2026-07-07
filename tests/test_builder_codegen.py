@@ -68,3 +68,34 @@ def test_generate_strategy_embeds_contract():
     system = client.messages.create.call_args.kwargs["system"]
     assert "class Strategy" in system          # strategy.py source embedded
     assert "MACrossover" in system             # example embedded
+
+
+def _client_returning(text):
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn")
+    return client
+
+
+def test_revise_strategy_sends_code_and_request():
+    client = _client_returning(f"```python\n{GOOD_CODE}```")
+    codegen.revise_strategy(client, "OLD_CODE_MARKER", "use EMA 21")
+    user_msg = client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "OLD_CODE_MARKER" in user_msg
+    assert "use EMA 21" in user_msg
+
+
+def test_repair_strategy_sends_code_and_error():
+    client = _client_returning(f"```python\n{GOOD_CODE}```")
+    codegen.repair_strategy(client, "OLD_CODE_MARKER", "Traceback: NameError")
+    user_msg = client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "OLD_CODE_MARKER" in user_msg
+    assert "NameError" in user_msg
+
+
+def test_truncated_response_raises():
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="```python\npartial")], stop_reason="max_tokens")
+    with pytest.raises(ValueError, match="truncated"):
+        codegen.generate_strategy(client, {"name": "x", "parameters": []})

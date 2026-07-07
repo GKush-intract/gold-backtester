@@ -69,12 +69,14 @@ def write_strategy_file(code: str, name: str, path: Optional[Path] = None) -> Pa
     """Write (or overwrite) the strategy file. Pass `path` to overwrite the session file."""
     if path is None:
         path = GENERATED_DIR / strategy_filename(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(code)
     return path
 
 
 def load_strategy_class(path: Path):
     """Import (or reload) the generated module and return its Strategy subclass."""
+    importlib.invalidate_caches()
     from ..strategy import Strategy
     mod_name = f"src.strategies.generated.{path.stem}"
     module = importlib.import_module(mod_name)
@@ -89,9 +91,13 @@ def _call(client, model: str, user_content: str) -> str:
     response = client.messages.create(
         model=model,
         max_tokens=16000,
+        cache_control={"type": "ephemeral"},
         system=_engine_contract(),
         messages=[{"role": "user", "content": user_content}],
     )
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise ValueError("Model response was truncated (hit max_tokens) — "
+                         "the strategy may be too complex for one file; try simplifying the spec.")
     text = "".join(b.text for b in response.content if b.type == "text")
     return extract_code(text)
 
