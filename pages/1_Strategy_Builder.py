@@ -29,8 +29,9 @@ ss.setdefault("b_run_requested", False)
 
 client = interview.get_client()
 if client is None:
-    st.error("`ANTHROPIC_API_KEY` is not set. Add it to your environment and restart:\n\n"
-             "```bash\nexport ANTHROPIC_API_KEY=sk-ant-...\nstreamlit run app.py\n```")
+    st.error("`ANTHROPIC_API_KEY` is not set. Put it in a `.env` file in the project root "
+             "(see `.env.example`) or export it, then restart:\n\n"
+             "```bash\necho 'ANTHROPIC_API_KEY=sk-ant-...' > .env\nstreamlit run app.py\n```")
     st.stop()
 
 # ---------------- Sidebar ----------------

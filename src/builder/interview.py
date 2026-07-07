@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 import anthropic
+from dotenv import load_dotenv
+
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 MODEL_CHOICES = ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"]
@@ -92,8 +96,10 @@ revised spec.
 _PARAM_KEYS = FINALIZE_SPEC_TOOL["input_schema"]["properties"]["parameters"]["items"]["required"]
 
 
-def get_client() -> Optional[anthropic.Anthropic]:
-    """Client from ANTHROPIC_API_KEY, or None if the key is missing."""
+def get_client(env_file: Optional[Path] = None) -> Optional[anthropic.Anthropic]:
+    """Client from ANTHROPIC_API_KEY (shell env, or a .env file in the repo root),
+    or None if the key is missing. A real environment variable wins over .env."""
+    load_dotenv(env_file or _ENV_FILE)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None
     return anthropic.Anthropic()

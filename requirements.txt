@@ -11,3 +11,4 @@ websockets==14.1
 python-multipart==0.0.20
 httpx==0.28.1
 anthropic==0.116.0
+python-dotenv==1.2.2

@@ -34,9 +34,17 @@ def _mock_client(content):
     return client
 
 
-def test_get_client_returns_none_without_key(monkeypatch):
+def test_get_client_returns_none_without_key(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert interview.get_client() is None
+    # point at a nonexistent .env so a developer's real repo-root .env can't leak in
+    assert interview.get_client(env_file=tmp_path / "missing.env") is None
+
+
+def test_get_client_reads_env_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("ANTHROPIC_API_KEY=sk-ant-test-123\n")
+    assert interview.get_client(env_file=env) is not None
 
 
 def test_turn_returns_text_only_and_appends_assistant_turn():
