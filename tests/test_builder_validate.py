@@ -152,3 +152,50 @@ def test_generate_validated_truncated_generation(smoke_csv):
     assert path is None
     assert not result["ok"]
     assert "truncated" in result["error"]
+
+
+QUADRATIC = '''\
+from ...strategy import Strategy
+
+class Quadratic(Strategy):
+    name = "Quadratic"
+    def on_bar(self, ctx):
+        # deliberately recompute over the FULL history each bar (O(n^2) overall)
+        closes = ctx.history["close"].tolist()
+        s = 0.0
+        for c in closes:
+            s += c * 1.0000001
+'''
+
+
+@pytest.fixture(scope="module")
+def perf_csv(tmp_path_factory):
+    idx = pd.date_range("2025-01-01", periods=5000, freq="5min", tz="UTC")
+    rng = np.random.default_rng(2)
+    base = 2000 + rng.normal(0, 1.0, len(idx)).cumsum()
+    df = pd.DataFrame({"timestamp": idx, "open": base, "high": base + 1,
+                       "low": base - 1, "close": base + 0.2, "volume": 1.0})
+    path = tmp_path_factory.mktemp("data") / "perf.csv"
+    df.to_csv(path, index=False)
+    return path
+
+
+def test_quadratic_strategy_rejected(perf_csv):
+    path = _write(QUADRATIC, "gen_validate_quadratic_test")
+    try:
+        result = validate.validate_strategy(path, perf_csv, bars=4000, timeout=120)
+        assert not result["ok"], result
+        assert "Performance check failed" in result["error"]
+        assert "ctx.history" in result["error"]  # actionable repair hint present
+    finally:
+        path.unlink()
+
+
+def test_linear_strategy_passes_perf_check(perf_csv):
+    # the GOOD strategy is O(1) per bar and must not be flagged even at low threshold
+    path = _write(GOOD, "gen_validate_linear_test")
+    try:
+        result = validate.validate_strategy(path, perf_csv, bars=4000)
+        assert result["ok"], result
+    finally:
+        path.unlink()

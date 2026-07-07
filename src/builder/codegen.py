@@ -44,7 +44,15 @@ You write Python strategy files for a gold (XAUUSD) backtesting engine.
    (a resampled OHLCV DataFrame; only use rows with index <= ctx.bar["time"]).
 7. Imports allowed: stdlib, numpy, pandas, and `from ...strategy import Strategy`
    (THREE dots — the file lives in src/strategies/generated/, two levels below src/).
-8. Keep on_bar fast: O(lookback) per bar, no prints, no file/network access.
+8. Keep on_bar O(lookback) per bar — NEVER compute indicators over the full ctx.history.
+   A backtest calls on_bar 100,000+ times; recomputing an EMA/RSI from bar 1 each time is
+   O(n^2) and appears to hang. Slice a bounded tail FIRST, e.g.:
+       hist = ctx.history
+       tail = max_period * 6 + 2      # 6x longest period ~ exact for EMAs
+       if len(hist) > tail:
+           hist = hist.iloc[-tail:]
+   then compute indicators on that slice only. Validation rejects super-linear strategies.
+   No prints, no file/network access.
 """
 
 

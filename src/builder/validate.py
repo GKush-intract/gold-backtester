@@ -14,11 +14,15 @@ _SENTINEL = "RESULT_JSON:"
 
 
 def validate_strategy(path: Path, csv_path: Path = DEFAULT_CSV,
-                      bars: int = 2000, timeout: int = 60) -> dict:
-    """ast-parse + import + smoke-backtest the file in a subprocess.
+                      bars: int = 2000, timeout: int = 60,
+                      min_quad_seconds: float = 0.25) -> dict:
+    """ast-parse + import + smoke-backtest the file in a subprocess, plus a
+    performance check that rejects super-linear (O(n^2)) on_bar implementations.
+    `min_quad_seconds`: the perf check only fires when the full smoke run is at
+    least this slow (avoids flagging noise on trivially fast strategies).
     Returns {"ok": bool, "error": str|None, "num_trades": int|None, "warning": str|None}."""
     cmd = [sys.executable, "-m", "src.builder.validate",
-           str(path), str(csv_path), str(bars)]
+           str(path), str(csv_path), str(bars), str(min_quad_seconds)]
     try:
         proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True,
                               timeout=timeout)
@@ -70,30 +74,65 @@ def generate_validated(client, spec: dict, model: str = DEFAULT_MODEL,
 
 
 def _main() -> None:
-    """Subprocess entry: python -m src.builder.validate <file> <csv> <bars>"""
+    """Subprocess entry: python -m src.builder.validate <file> <csv> <bars> [min_quad_seconds]"""
     import ast
     import traceback
+
+    import time
 
     out = {"ok": False, "error": None, "num_trades": None, "warning": None}
     try:
         path = Path(sys.argv[1])
         csv_path, bars = sys.argv[2], int(sys.argv[3])
+        min_quad_seconds = float(sys.argv[4]) if len(sys.argv) > 4 else 0.25
 
         ast.parse(path.read_text())                       # 1) syntax
 
         from src.builder.codegen import load_strategy_class  # 2) import + instantiate
-        strat = load_strategy_class(path)()
+        cls = load_strategy_class(path)
 
         from src.data_loader import load_ohlc              # 3) smoke backtest
         from src.engine import BacktestConfig
         from src import runner
-        data = load_ohlc(csv_path).tail(bars)
-        res = runner.run_backtest(BacktestConfig(), strat, data)
-        out["ok"] = True
-        out["num_trades"] = int(len(res.trades))
-        if out["num_trades"] == 0:
-            out["warning"] = ("Smoke run produced 0 trades — the logic may be too "
-                              "restrictive, or it may just need more data.")
+        data = load_ohlc(csv_path)
+
+        # small run first (bars/4) to establish a per-bar baseline for the perf check
+        small = data.tail(max(bars // 4, 50))
+        t0 = time.perf_counter()
+        runner.run_backtest(BacktestConfig(), cls(), small)
+        t_small = time.perf_counter() - t0
+
+        full = data.tail(bars)
+        t0 = time.perf_counter()
+        res = runner.run_backtest(BacktestConfig(), cls(), full)
+        t_full = time.perf_counter() - t0
+
+        # 4) performance check: per-bar cost must not grow with history length.
+        # O(1)/bar strategies -> ratio ~1; O(n)/bar (quadratic overall) -> ratio
+        # ~ bars/small_bars in theory, ~2.5-3 in practice once constant per-bar
+        # costs dilute it. Threshold 2.0 biases toward sensitivity: a false
+        # positive just costs one repair round-trip (and yields better code),
+        # while a miss means an apparent hang on the full backtest.
+        per_bar_full = t_full / max(len(full), 1)
+        per_bar_small = t_small / max(len(small), 1)
+        ratio = per_bar_full / per_bar_small if per_bar_small > 0 else 1.0
+        if t_full >= min_quad_seconds and ratio > 2.0:
+            out["error"] = (
+                f"Performance check failed: per-bar cost grows with history length "
+                f"({ratio:.1f}x higher at {len(full)} bars than at {len(small)} bars; "
+                f"full smoke run took {t_full:.1f}s for {len(full)} bars). on_bar is "
+                "recomputing indicators over the full ctx.history each bar, which is "
+                "O(n^2) and will appear to hang on a real backtest. Fix: slice a "
+                "bounded tail first (e.g. tail = max_period * 6 + 2; "
+                "hist = ctx.history.iloc[-tail:] if len(ctx.history) > tail else "
+                "ctx.history) and compute all indicators on that slice only."
+            )
+        else:
+            out["ok"] = True
+            out["num_trades"] = int(len(res.trades))
+            if out["num_trades"] == 0:
+                out["warning"] = ("Smoke run produced 0 trades — the logic may be too "
+                                  "restrictive, or it may just need more data.")
     except Exception:
         out["error"] = traceback.format_exc()
     print(_SENTINEL + json.dumps(out))
