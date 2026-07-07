@@ -10,4 +10,4 @@ uvicorn[standard]==0.34.0
 websockets==14.1
 python-multipart==0.0.20
 httpx==0.28.1
-anthropic
+anthropic==0.116.0
