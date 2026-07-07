@@ -97,9 +97,10 @@ _PARAM_KEYS = FINALIZE_SPEC_TOOL["input_schema"]["properties"]["parameters"]["it
 
 
 def get_client(env_file: Optional[Path] = None) -> Optional[anthropic.Anthropic]:
-    """Client from ANTHROPIC_API_KEY (shell env, or a .env file in the repo root),
-    or None if the key is missing. A real environment variable wins over .env."""
-    load_dotenv(env_file or _ENV_FILE)
+    """Client from ANTHROPIC_API_KEY (repo-root .env file, or shell env), or None if
+    the key is missing. override=True: .env is re-read on every Streamlit rerun, so
+    editing the key there takes effect on the next message — no server restart."""
+    load_dotenv(env_file or _ENV_FILE, override=True)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None
     return anthropic.Anthropic()

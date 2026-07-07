@@ -109,7 +109,7 @@ Browser: use Chrome (voice capture uses MediaRecorder).
 Describe a strategy in plain English and let Claude turn it into runnable code.
 
 ```bash
-echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env    # or export it in your shell (env var wins)
+echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env    # .env wins; edits apply without restarting
 streamlit run app.py     # open the "Strategy Builder" page in the sidebar
 ```
 
