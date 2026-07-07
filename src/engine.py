@@ -6,7 +6,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .strategy import Context, Position, Strategy, OZ_PER_LOT, clamp_lots
+from .strategy import (Context, Position, Strategy, LOT_STEP, OZ_PER_LOT,
+                       clamp_lots, round_lots)
 
 
 @dataclass
@@ -65,10 +66,12 @@ def _commission(size_lots, cfg):
     return cfg.commission_per_trade + cfg.commission_per_lot * size_lots
 
 
-def _trade_pnl(pos: Position, exit_fill: float, cfg: BacktestConfig) -> float:
+def _trade_pnl(pos: Position, exit_fill: float, cfg: BacktestConfig,
+               size: Optional[float] = None) -> float:
+    size = pos.size if size is None else size
     sign = 1 if pos.direction == "long" else -1
-    gross = (exit_fill - pos.entry_price) * pos.size * OZ_PER_LOT * sign
-    return gross - _commission(pos.size, cfg)
+    gross = (exit_fill - pos.entry_price) * size * OZ_PER_LOT * sign
+    return gross - _commission(size, cfg)
 
 
 def _unrealized(pos: Optional[Position], price: float) -> float:
@@ -138,16 +141,21 @@ def _resolve_bracket(pos: Position, o, h, l, cfg: BacktestConfig):
     return None
 
 
-def _make_trade(pos, exit_time, exit_fill, pnl, reason, exit_index) -> Trade:
-    r = pnl / pos.initial_risk if pos.initial_risk not in (None, 0) else None
-    notional = pos.size * OZ_PER_LOT * pos.entry_price
+def _make_trade(pos, exit_time, exit_fill, pnl, reason, exit_index,
+                size: Optional[float] = None,
+                initial_risk: Optional[float] = None) -> Trade:
+    """size/initial_risk override pos values for partial closes (pro-rated risk)."""
+    size = pos.size if size is None else size
+    initial_risk = pos.initial_risk if initial_risk is None else initial_risk
+    r = pnl / initial_risk if initial_risk not in (None, 0) else None
+    notional = size * OZ_PER_LOT * pos.entry_price
     leverage = notional / pos.entry_equity if pos.entry_equity else 0.0
     return Trade(
         entry_time=pos.entry_time, exit_time=exit_time, direction=pos.direction,
-        size=pos.size, entry_price=pos.entry_price, exit_price=exit_fill,
+        size=size, entry_price=pos.entry_price, exit_price=exit_fill,
         stop_loss=pos.stop_loss, take_profit=pos.take_profit, pnl=pnl, r_multiple=r,
         exit_reason=reason, tag=pos.tag, bars_held=exit_index - pos.entry_index,
-        initial_risk=pos.initial_risk, notional=notional, leverage=leverage,
+        initial_risk=initial_risk, notional=notional, leverage=leverage,
     )
 
 
@@ -166,6 +174,7 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
     pending_order = None
     pending_close = False
     pending_close_reason = "manual"
+    pending_close_fraction = 1.0
     trades: list[Trade] = []
     rows = []
     stopped = False
@@ -184,15 +193,33 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
     for i in range(n):
         o, h, l, c, t = opens[i], highs[i], lows[i], closes[i], times[i]
 
-        # 1) discretionary close requested last bar fills at THIS open (first event of bar)
+        # 1) discretionary close requested last bar fills at THIS open (first event of bar).
+        # fraction < 1 books the closed lots as a Trade (risk pro-rated) and keeps the
+        # remainder running with its SL/TP/trail; closed lots round DOWN to LOT_STEP.
         if position is not None and pending_close:
             base = o
             exit_fill = _sell_fill(base, cfg) if position.direction == "long" else _buy_fill(base, cfg)
-            pnl = _trade_pnl(position, exit_fill, cfg)
-            balance += pnl
-            trades.append(_make_trade(position, t, exit_fill, pnl, pending_close_reason, i))
-            position = None
+            closed = (position.size if pending_close_fraction >= 1.0
+                      else round_lots(position.size * pending_close_fraction))
+            remainder = round(position.size - closed, 2)
+            if closed > 0 and remainder >= LOT_STEP:
+                closed_risk = (position.initial_risk * (closed / position.size)
+                               if position.initial_risk else None)
+                pnl = _trade_pnl(position, exit_fill, cfg, size=closed)
+                balance += pnl
+                trades.append(_make_trade(position, t, exit_fill, pnl, pending_close_reason, i,
+                                          size=closed, initial_risk=closed_risk))
+                position.size = remainder
+                if closed_risk is not None:
+                    position.initial_risk = position.initial_risk - closed_risk
+            elif closed > 0:
+                pnl = _trade_pnl(position, exit_fill, cfg)
+                balance += pnl
+                trades.append(_make_trade(position, t, exit_fill, pnl, pending_close_reason, i))
+                position = None
+            # closed == 0: fraction too small for LOT_STEP -> request ignored
         pending_close = False
+        pending_close_fraction = 1.0
 
         # 2) manage existing position: SL/TP may fire intrabar
         if position is not None:
@@ -255,6 +282,7 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
         if ctx._close_requested and position is not None:
             pending_close = True
             pending_close_reason = ctx._close_reason
+            pending_close_fraction = ctx._close_fraction
 
         rows.append((t, equity, balance))
 

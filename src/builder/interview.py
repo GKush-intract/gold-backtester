@@ -72,11 +72,13 @@ it is pinned down, then call the finalize_spec tool.
 - Leverage cap on notional; sizes are in lots (1 lot = 100 oz), min step 0.01
 - Higher-timeframe views (h1, h4, ...) resampled from the base data
 - ONE open position at a time; long and short both supported
+- Partial closes / scaling out: ctx.close(reason=..., fraction=0.5) closes that fraction \
+at the next bar open; the remainder keeps its SL/TP/trailing stop and R is pro-rated
 - Full bar history up to the current bar (no look-ahead)
 
 ## NOT supported — if the user asks, offer the nearest supported alternative
 - Limit/stop entry orders (only market at next open)
-- Partial closes / scaling out, pyramiding, multiple concurrent positions
+- Pyramiding / adding to an open position, multiple concurrent positions
 - Tick data (bars only), multi-symbol strategies
 
 ## Interview rules

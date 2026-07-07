@@ -172,3 +172,70 @@ def test_trailing_stop_short_locks_profit():
     assert t["exit_reason"] == "trailing_stop"
     assert t["exit_price"] == pytest.approx(95.0)
     assert t["pnl"] == pytest.approx(500.0)  # short: (100-95)*1 lot*100 oz
+
+
+class PartialCloser(Strategy):
+    """Enter long on bar 0 (fills bar 1 open), request a fractional close on bar 2."""
+    name = "partial_closer"
+
+    def __init__(self, fraction, size=1.0, sl=90.0, **kw):
+        super().__init__(**kw)
+        self.fraction, self.size, self.sl, self.entered = fraction, size, sl, False
+
+    def on_bar(self, ctx):
+        if not self.entered and ctx.position is None:
+            ctx.enter("long", self.size, stop_loss=self.sl)
+            self.entered = True
+        elif ctx.position is not None and ctx.index == 2:
+            ctx.close(reason="scale_out", fraction=self.fraction)
+
+
+def test_partial_close_books_fraction_and_keeps_rest():
+    data = make_data([(100, 100, 100, 100)] * 3 + [(110, 110, 110, 110), (120, 120, 120, 120)])
+    cfg = BacktestConfig(spread=0.0, slippage=0.0)
+    res = run_backtest(cfg, PartialCloser(fraction=0.5), data)
+    assert len(res.trades) == 1                       # remainder still open at the end
+    t = res.trades.iloc[0]
+    assert t["size"] == pytest.approx(0.5)
+    assert t["exit_reason"] == "scale_out"
+    assert t["exit_price"] == pytest.approx(110.0)    # fills at the NEXT bar open
+    assert t["pnl"] == pytest.approx((110 - 100) * 0.5 * 100)
+    ec = res.equity_curve
+    assert ec["balance"].iloc[-1] == pytest.approx(cfg.opening_balance + 500)
+    # remaining half marked to market at 120
+    assert ec["equity"].iloc[-1] == pytest.approx(cfg.opening_balance + 500 + 20 * 0.5 * 100)
+
+
+def test_partial_close_prorates_initial_risk():
+    # entry 100 (sl 90 -> total risk $1000); half out at 110 (+1R), stop the rest at 90 (-1R)
+    data = make_data([(100, 100, 100, 100)] * 3 + [(110, 110, 110, 110)] * 2
+                     + [(90, 90, 89, 89)])
+    res = run_backtest(BacktestConfig(spread=0.0, slippage=0.0), PartialCloser(fraction=0.5), data)
+    assert len(res.trades) == 2
+    scale, stop = res.trades.iloc[0], res.trades.iloc[1]
+    assert scale["initial_risk"] == pytest.approx(500.0)
+    assert scale["r_multiple"] == pytest.approx(1.0)
+    assert stop["size"] == pytest.approx(0.5)
+    assert stop["exit_reason"] == "stop"
+    assert stop["initial_risk"] == pytest.approx(500.0)
+    assert stop["r_multiple"] == pytest.approx(-1.0)
+
+
+def test_close_fraction_one_is_full_close():
+    data = make_data([(100, 100, 100, 100)] * 3 + [(110, 110, 110, 110)])
+    res = run_backtest(BacktestConfig(spread=0.0), PartialCloser(fraction=1.0), data)
+    assert len(res.trades) == 1
+    assert res.trades.iloc[0]["size"] == pytest.approx(1.0)
+
+
+def test_close_invalid_fraction_ignored():
+    data = make_data([(100, 100, 100, 100)] * 4)
+    res = run_backtest(BacktestConfig(spread=0.0), PartialCloser(fraction=0.0), data)
+    assert len(res.trades) == 0  # request ignored; position stays open
+
+
+def test_partial_fraction_rounding_to_zero_lots_ignored():
+    # 0.01 lots * 0.5 rounds down to 0 lots -> ignored, position intact
+    data = make_data([(100, 100, 100, 100)] * 4)
+    res = run_backtest(BacktestConfig(spread=0.0), PartialCloser(fraction=0.5, size=0.01), data)
+    assert len(res.trades) == 0

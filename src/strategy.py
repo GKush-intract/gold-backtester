@@ -69,6 +69,7 @@ class Context:
         self._order: Optional[Order] = None
         self._close_requested: bool = False
         self._close_reason: str = "manual"
+        self._close_fraction: float = 1.0
 
     @property
     def bar(self) -> dict:
@@ -96,9 +97,22 @@ class Context:
             return  # ignore non-positive sizing
         self._order = Order(direction, float(size), stop_loss, take_profit, tag, trail)
 
-    def close(self, reason="manual"):
+    def close(self, reason="manual", fraction=1.0):
+        """Request a close, filled at the next bar open. fraction in (0, 1]:
+        1.0 closes the whole position; e.g. 0.5 closes half (partial close).
+        Closed lots round DOWN to LOT_STEP; a fraction that rounds to 0 lots is
+        ignored. The remainder keeps its SL/TP/trailing stop and entry stats;
+        initial risk (and therefore R multiples) is pro-rated across the parts.
+        Invalid fractions (<= 0 or NaN) are ignored; > 1 is clamped to 1."""
+        try:
+            fraction = float(fraction)
+        except (TypeError, ValueError):
+            return
+        if not fraction > 0:  # also rejects NaN
+            return
         self._close_requested = True
         self._close_reason = reason
+        self._close_fraction = min(fraction, 1.0)
 
     def size_for_risk(self, risk_pct, entry_price, stop_price) -> float:
         """LOTS to risk `risk_pct` of equity over the stop distance:
