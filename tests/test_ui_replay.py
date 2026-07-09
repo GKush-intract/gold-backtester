@@ -111,14 +111,14 @@ def test_chart_payload_structure():
     assert p["sl"] and p["tp"] and p["conn"]      # selected trade segments present
     assert p["overlays"][0]["name"] == "EMA(20)"
     assert p["equity"]
-    assert p["range"]["from"] < p["range"]["to"]
+    assert p["logical"]["from"] < p["logical"]["to"]
 
 
 def test_chart_payload_no_selection():
     res, data = _mini_backtest()
     p = build_chart_payload(res, data, [], sel=None)
     assert p["sl"] == [] and p["tp"] == [] and p["conn"] == []
-    assert p["range"] is None
+    assert p["logical"] is None
     assert p["window"] == [0, len(data) - 1]
 
 
@@ -128,5 +128,6 @@ def test_chart_payload_caps_large_datasets():
     lo, hi = p["window"]
     assert hi - lo <= 100
     assert len(p["candles"]) == hi - lo + 1
-    # selected trade's window is inside the embedded slice
-    assert p["range"] is None or (p["range"]["from"] >= p["candles"][0]["time"])
+    # selected trade's logical window is inside the embedded slice
+    if p["logical"] is not None:
+        assert -1 <= p["logical"]["from"] < p["logical"]["to"] <= len(p["candles"])

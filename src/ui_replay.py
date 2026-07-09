@@ -177,16 +177,18 @@ def build_chart_payload(res, data: pd.DataFrame, overlays: list[tuple[str, int]]
     equity = [{"time": int(t), "value": round(float(v), 2)}
               for t, v in zip(_epoch_s(eqw.index), eqw["equity"])]
 
-    vrange = None
+    # logical (bar-index) range: robust against weekend/session gaps, unlike
+    # time-based setVisibleRange
+    logical = None
     if len(trades) and sel is not None:
         e_idx, x_idx = int(trades["entry_idx"].iloc[sel]), int(trades["exit_idx"].iloc[sel])
         wlo, whi = compute_window((e_idx + x_idx) // 2, span, n, x_idx - e_idx + 1)
         wlo, whi = max(wlo, lo), min(whi, hi)
-        vrange = {"from": epoch_at(wlo), "to": epoch_at(whi)}
+        logical = {"from": wlo - lo - 0.5, "to": whi - lo + 0.5}
 
     return {"candles": candles, "markers": markers, "sl": sl_seg, "tp": tp_seg,
             "conn": conn, "overlays": overlay_series, "equity": equity,
-            "range": vrange, "window": [int(lo), int(hi)]}
+            "logical": logical, "window": [int(lo), int(hi)]}
 
 
 def _chart_html(payload: dict, height: int = 520) -> str:
@@ -232,11 +234,11 @@ if (P.equity.length) {{
                                     lastValueVisible: false, title: 'equity' }});
   eq.setData(P.equity);
 }}
-if (P.range) chart.timeScale().setVisibleRange(P.range);
-else chart.timeScale().fitContent();
 const fit = () => chart.applyOptions({{ width: el.clientWidth }});
 new ResizeObserver(fit).observe(el);
 fit();
+if (P.logical) chart.timeScale().setVisibleLogicalRange(P.logical);
+else chart.timeScale().fitContent();
 </script>
 """
 
