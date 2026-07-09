@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import pandas as pd
-import plotly.graph_objects as go
-import streamlit as st
-from plotly.subplots import make_subplots
+import json
+from pathlib import Path
 
-SPANS = [100, 200, 400, 800]  # selectable window sizes (bars)
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+
+SPANS = [100, 200, 400, 800]        # initial visible window sizes (bars)
+MAX_BARS = 30_000                   # cap on candles embedded in the chart payload
 _PALETTE = ["#f39c12", "#3498db", "#9b59b6", "#16a085", "#e67e22", "#7f8c8d"]
+_LIB = Path(__file__).parent / "static" / "lightweight_charts_v4.js"
 
 
 def detect_indicator_defaults(params: dict | None) -> str:
@@ -57,16 +61,6 @@ def trade_bar_positions(trades: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Dat
     return t
 
 
-def _num(x) -> bool:
-    return x is not None and x == x  # not None and not NaN
-
-
-def _trade_label(i: int, r) -> str:
-    rr = f"{r.r_multiple:+.2f}R" if _num(r.r_multiple) else "?R"
-    return (f"#{i}  {r.direction} {pd.Timestamp(r.entry_time):%m-%d %H:%M} "
-            f"→ {r.exit_reason} ({r.pnl:+.0f}$, {rr})")
-
-
 def compute_window(center: int, span: int, n: int,
                    trade_len: int | None = None, pad: int = 20) -> tuple[int, int]:
     """Inclusive [lo, hi] window of ~`span` bars centered on `center`, clamped to the
@@ -84,162 +78,218 @@ def compute_window(center: int, span: int, n: int,
     return max(lo, 0), hi
 
 
+def _num(x) -> bool:
+    return x is not None and x == x  # not None and not NaN
+
+
+def _trade_label(i: int, r) -> str:
+    rr = f"{r.r_multiple:+.2f}R" if _num(r.r_multiple) else "?R"
+    return (f"#{i}  {r.direction} {pd.Timestamp(r.entry_time):%m-%d %H:%M} "
+            f"→ {r.exit_reason} ({r.pnl:+.0f}$, {rr})")
+
+
+def _epoch_s(index: pd.DatetimeIndex) -> pd.Index:
+    """Unix seconds, resolution-independent (pandas 3.0 may use us indexes)."""
+    return (index - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta("1s")
+
+
+def build_chart_payload(res, data: pd.DataFrame, overlays: list[tuple[str, int]],
+                        sel: int | None = None, span: int = 200,
+                        max_bars: int = MAX_BARS) -> dict:
+    """Everything the embedded lightweight-charts needs, as one JSON-able dict:
+    candles, trade markers, SL/TP segments for the selected trade, indicator
+    overlay series, equity series and the initial visible range."""
+    trades = trade_bar_positions(res.trades, data.index)
+    n = len(data)
+
+    lo, hi = 0, n - 1
+    if n > max_bars:  # huge datasets: embed a window around the selection
+        center = int(trades["entry_idx"].iloc[sel]) if sel is not None and len(trades) \
+            else n - max_bars // 2
+        lo, hi = compute_window(center, max_bars, n)
+    sub = data.iloc[lo:hi + 1]
+    times = _epoch_s(sub.index)
+    epoch_at = lambda idx: int(times[idx - lo])  # bar index -> unix seconds
+
+    candles = [{"time": int(t), "open": round(o, 3), "high": round(h, 3),
+                "low": round(l, 3), "close": round(c, 3)}
+               for t, o, h, l, c in zip(times, sub["open"], sub["high"],
+                                        sub["low"], sub["close"])]
+
+    markers = []
+    vis = trades[(trades["exit_idx"] >= lo) & (trades["entry_idx"] <= hi)] if len(trades) else trades
+    for i, r in zip(vis.index, vis.itertuples()):
+        hl = sel is not None and i == sel
+        rr = f"{r.r_multiple:+.1f}R" if _num(r.r_multiple) else "?R"
+        if lo <= r.entry_idx <= hi:
+            markers.append({
+                "time": epoch_at(r.entry_idx),
+                "position": "belowBar",
+                "shape": "arrowUp" if r.direction == "long" else "arrowDown",
+                "color": "#2ecc71" if r.direction == "long" else "#e74c3c",
+                "size": 2 if hl else 1,
+                "text": f"#{i} in" if hl else "",
+            })
+        if lo <= r.exit_idx <= hi:
+            markers.append({
+                "time": epoch_at(r.exit_idx),
+                "position": "aboveBar",
+                "shape": "circle",
+                "color": "#2ecc71" if r.pnl >= 0 else "#e74c3c",
+                "size": 2 if hl else 1,
+                "text": f"{r.exit_reason} {rr}" if hl else "",
+            })
+    markers.sort(key=lambda m: m["time"])
+
+    sl_seg, tp_seg, conn = [], [], []
+    if sel is not None and len(trades) and sel in set(vis.index):
+        r = trades.iloc[sel]
+        e_idx = int(max(r["entry_idx"], lo))
+        x_idx = int(min(r["exit_idx"], hi))
+        t0, t1 = epoch_at(e_idx), epoch_at(x_idx)
+        if t1 == t0 and x_idx + 1 <= hi:  # same-bar entry/exit: widen so segments render
+            t1 = epoch_at(x_idx + 1)
+        if _num(r["stop_loss"]):
+            sl_seg = [{"time": t0, "value": round(float(r["stop_loss"]), 3)},
+                      {"time": t1, "value": round(float(r["stop_loss"]), 3)}]
+        if _num(r["take_profit"]):
+            tp_seg = [{"time": t0, "value": round(float(r["take_profit"]), 3)},
+                      {"time": t1, "value": round(float(r["take_profit"]), 3)}]
+        conn = [{"time": t0, "value": round(float(r["entry_price"]), 3)},
+                {"time": t1, "value": round(float(r["exit_price"]), 3)}]
+
+    overlay_series = []
+    for j, (kind, per) in enumerate(overlays):
+        if kind == "ema":
+            series = data["close"].ewm(span=per, adjust=False).mean()
+        else:
+            series = data["close"].rolling(per).mean()
+        seg = series.iloc[lo:hi + 1]
+        overlay_series.append({
+            "name": f"{kind.upper()}({per})",
+            "color": _PALETTE[j % len(_PALETTE)],
+            "data": [{"time": int(t), "value": round(float(v), 3)}
+                     for t, v in zip(times, seg) if v == v],
+        })
+
+    eq = res.equity_curve
+    eqw = eq.iloc[lo:min(hi + 1, len(eq))]
+    equity = [{"time": int(t), "value": round(float(v), 2)}
+              for t, v in zip(_epoch_s(eqw.index), eqw["equity"])]
+
+    vrange = None
+    if len(trades) and sel is not None:
+        e_idx, x_idx = int(trades["entry_idx"].iloc[sel]), int(trades["exit_idx"].iloc[sel])
+        wlo, whi = compute_window((e_idx + x_idx) // 2, span, n, x_idx - e_idx + 1)
+        wlo, whi = max(wlo, lo), min(whi, hi)
+        vrange = {"from": epoch_at(wlo), "to": epoch_at(whi)}
+
+    return {"candles": candles, "markers": markers, "sl": sl_seg, "tp": tp_seg,
+            "conn": conn, "overlays": overlay_series, "equity": equity,
+            "range": vrange, "window": [int(lo), int(hi)]}
+
+
+def _chart_html(payload: dict, height: int = 520) -> str:
+    lib = _LIB.read_text()
+    return f"""
+<div id="chart" style="width:100%;height:{height}px"></div>
+<script>{lib}</script>
+<script>
+const P = {json.dumps(payload)};
+const el = document.getElementById('chart');
+const chart = LightweightCharts.createChart(el, {{
+  height: {height},
+  layout: {{ background: {{ color: '#ffffff' }}, textColor: '#333' }},
+  grid: {{ vertLines: {{ color: '#f0f0f0' }}, horzLines: {{ color: '#f0f0f0' }} }},
+  timeScale: {{ timeVisible: true, secondsVisible: false, rightOffset: 4 }},
+  rightPriceScale: {{ scaleMargins: {{ top: 0.05, bottom: 0.22 }} }},
+  leftPriceScale: {{ visible: true, scaleMargins: {{ top: 0.8, bottom: 0 }} }},
+  crosshair: {{ mode: 0 }},
+}});
+const candles = chart.addCandlestickSeries({{
+  upColor: '#2ecc71', downColor: '#e74c3c',
+  wickUpColor: '#2ecc71', wickDownColor: '#e74c3c', borderVisible: false,
+}});
+candles.setData(P.candles);
+candles.setMarkers(P.markers);
+for (const ov of P.overlays) {{
+  const s = chart.addLineSeries({{ color: ov.color, lineWidth: 1, title: ov.name,
+                                   priceLineVisible: false, lastValueVisible: false }});
+  s.setData(ov.data);
+}}
+const seg = (data, color, style, width) => {{
+  if (!data || !data.length) return;
+  const s = chart.addLineSeries({{ color: color, lineWidth: width, lineStyle: style,
+                                   priceLineVisible: false, lastValueVisible: false }});
+  s.setData(data);
+}};
+seg(P.sl, '#e74c3c', 2, 2);      // dashed stop-loss of the selected trade
+seg(P.tp, '#2ecc71', 2, 2);      // dashed take-profit
+seg(P.conn, '#7f8c8d', 1, 1);    // dotted entry->exit connector
+if (P.equity.length) {{
+  const eq = chart.addLineSeries({{ priceScaleId: 'left', color: 'rgba(52,152,219,0.85)',
+                                    lineWidth: 1, priceLineVisible: false,
+                                    lastValueVisible: false, title: 'equity' }});
+  eq.setData(P.equity);
+}}
+if (P.range) chart.timeScale().setVisibleRange(P.range);
+else chart.timeScale().fitContent();
+const fit = () => chart.applyOptions({{ width: el.clientWidth }});
+new ResizeObserver(fit).observe(el);
+fit();
+</script>
+"""
+
+
 def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_",
                   params: dict | None = None) -> None:
-    """Trade inspector: pick a trade and the chart centers it — context bars before
-    entry and after exit, entry/exit markers, SL/TP segments, indicator overlays and
-    the equity curve. Scroll with the arrow buttons, the slider, or drag-pan/wheel-zoom
-    directly on the chart."""
+    """Trade inspector on TradingView lightweight-charts: native drag-scroll and
+    wheel-zoom over the whole backtest, entry/exit markers for every trade, SL/TP
+    and connector segments for the selected trade (kept centered with context
+    before entry and after exit), indicator overlays and the equity curve."""
     trades = trade_bar_positions(res.trades, data.index)
     n = len(data)
     if n == 0:
         st.info("No data to replay.")
         return
 
-    kcen = f"{key_prefix}center"
     kdd = f"{key_prefix}sel"
-    kdone = f"{key_prefix}sel_done"
-
-    def _mid(i: int) -> int:
-        return int((trades["entry_idx"].iloc[i] + trades["exit_idx"].iloc[i]) // 2)
-
-    if kcen not in st.session_state:
-        st.session_state[kcen] = _mid(0) if len(trades) else min(100, n - 1)
-        if len(trades):
-            st.session_state[kdd] = 0
-            st.session_state[kdone] = 0
-    st.session_state[kcen] = int(min(max(st.session_state[kcen], 0), n - 1))
-
-    def _select_trade(i: int) -> None:
-        i = int(min(max(i, 0), len(trades) - 1))
-        st.session_state[kdd] = i
-        st.session_state[kdone] = i
-        st.session_state[kcen] = _mid(i)
-
-    span_key = f"{key_prefix}span"
-    span = st.session_state.get(span_key, 200)
-
-    # buttons render BEFORE the selectbox/slider so they may set widget state this run
-    c = st.columns([1.2, 0.7, 0.7, 1.2, 2.7, 0.9])
+    c = st.columns([1.2, 1.2, 3.4, 0.9])
     if c[0].button("⏮ prev trade", key=f"{key_prefix}pt") and len(trades):
-        cur_sel = st.session_state.get(kdd)
-        _select_trade((cur_sel - 1) if cur_sel is not None else 0)
-    if c[1].button("◀", key=f"{key_prefix}sl", help=f"scroll left {span // 2} bars"):
-        st.session_state[kcen] = max(0, st.session_state[kcen] - span // 2)
-    if c[2].button("▶", key=f"{key_prefix}sr", help=f"scroll right {span // 2} bars"):
-        st.session_state[kcen] = min(n - 1, st.session_state[kcen] + span // 2)
-    if c[3].button("next trade ⏭", key=f"{key_prefix}nt") and len(trades):
-        cur_sel = st.session_state.get(kdd)
-        _select_trade((cur_sel + 1) if cur_sel is not None else 0)
+        cur = st.session_state.get(kdd)
+        st.session_state[kdd] = max((cur - 1) if cur is not None else 0, 0)
+    if c[1].button("next trade ⏭", key=f"{key_prefix}nt") and len(trades):
+        cur = st.session_state.get(kdd)
+        st.session_state[kdd] = min((cur + 1) if cur is not None else 0, len(trades) - 1)
 
     sel = None
     if len(trades):
+        if kdd not in st.session_state:
+            st.session_state[kdd] = 0
         labels = {i: _trade_label(i, r) for i, r in enumerate(trades.itertuples())}
-        sel = c[4].selectbox("Trade", options=[None] + list(labels),
-                             format_func=lambda i: "(no trade selected)" if i is None else labels[i],
+        sel = c[2].selectbox("Trade", options=[None] + list(labels),
+                             format_func=lambda i: "(no trade — full chart)" if i is None else labels[i],
                              key=kdd, label_visibility="collapsed")
-        if sel is not None and st.session_state.get(kdone) != sel:
-            # picked from the dropdown: recenter (kdd already holds the new value)
-            st.session_state[kdone] = sel
-            st.session_state[kcen] = _mid(sel)
-    span = c[5].selectbox("Window", SPANS, index=1, key=span_key,
+    span = c[3].selectbox("Window", SPANS, index=1, key=f"{key_prefix}span",
                           label_visibility="collapsed",
-                          help="Window size in bars — the trade stays centered")
+                          help="Initial zoom in bars — scroll/zoom freely on the chart itself")
 
-    center = st.slider("Center bar", 0, n - 1, key=kcen)
     spec = st.text_input("Indicator overlays", detect_indicator_defaults(params),
                          key=f"{key_prefix}ind",
                          help="Comma-separated, computed on the backtest timeframe: "
                               "ema:33, sma:50. (HTF indicators aren't drawn — "
                               "different timeframe.)")
-    overlays = parse_overlays(spec)
+    payload = build_chart_payload(res, data, parse_overlays(spec), sel=sel, span=span)
+    components.html(_chart_html(payload), height=540)
 
-    trade_len = None
-    if sel is not None:
-        trade_len = int(trades["exit_idx"].iloc[sel] - trades["entry_idx"].iloc[sel] + 1)
-    lo, hi = compute_window(center, span, n, trade_len)
-    win = data.iloc[lo:hi + 1]
-
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
-                        vertical_spacing=0.03)
-    fig.add_trace(go.Candlestick(x=win.index, open=win["open"], high=win["high"],
-                                 low=win["low"], close=win["close"], showlegend=False),
-                  row=1, col=1)
-
-    for j, (kind, per) in enumerate(overlays):
-        if kind == "ema":
-            series = data["close"].ewm(span=per, adjust=False).mean()
-        else:
-            series = data["close"].rolling(per).mean()
-        fig.add_trace(go.Scatter(x=win.index, y=series.iloc[lo:hi + 1], mode="lines",
-                                 name=f"{kind.upper()}({per})",
-                                 line=dict(width=1.2, color=_PALETTE[j % len(_PALETTE)])),
-                      row=1, col=1)
-
-    # explicit axis ranges: markers/lines outside the window must not stretch the view
-    ymin, ymax = float(win["low"].min()), float(win["high"].max())
-    ypad = (ymax - ymin) * 0.08 or 1.0
-    fig.update_xaxes(range=[win.index[0], win.index[-1]], row=1, col=1)
-    fig.update_yaxes(range=[ymin - ypad, ymax + ypad], row=1, col=1)
-
-    vis = trades[(trades["exit_idx"] >= lo) & (trades["entry_idx"] <= hi)] if len(trades) else trades
-    for i, r in zip(vis.index, vis.itertuples()):
-        col = "#2ecc71" if r.pnl >= 0 else "#e74c3c"
-        hl = (sel is not None and i == sel)
-        et, xt = data.index[r.entry_idx], data.index[r.exit_idx]
-        if _num(r.stop_loss):
-            fig.add_trace(go.Scatter(x=[et, xt], y=[r.stop_loss] * 2, mode="lines",
-                                     line=dict(dash="dash", width=2 if hl else 1,
-                                               color="#e74c3c"),
-                                     showlegend=False, hoverinfo="skip"), row=1, col=1)
-        if _num(r.take_profit):
-            fig.add_trace(go.Scatter(x=[et, xt], y=[r.take_profit] * 2, mode="lines",
-                                     line=dict(dash="dash", width=2 if hl else 1,
-                                               color="#2ecc71"),
-                                     showlegend=False, hoverinfo="skip"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=[et, xt], y=[r.entry_price, r.exit_price], mode="lines",
-                                 line=dict(dash="dot", width=2 if hl else 1, color=col),
-                                 showlegend=False, hoverinfo="skip"), row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=[et], y=[r.entry_price], mode="markers",
-            marker=dict(symbol="triangle-up" if r.direction == "long" else "triangle-down",
-                        size=16 if hl else 11,
-                        color="#2ecc71" if r.direction == "long" else "#e74c3c",
-                        line=dict(width=1, color="#333")),
-            showlegend=False,
-            hovertext=f"entry {r.direction} @{r.entry_price:.2f} [{r.tag}] size {r.size}",
-            hoverinfo="text"), row=1, col=1)
-        rr = f"{r.r_multiple:+.2f}R" if _num(r.r_multiple) else "?R"
-        fig.add_trace(go.Scatter(
-            x=[xt], y=[r.exit_price], mode="markers+text",
-            marker=dict(symbol="x", size=15 if hl else 10, color=col),
-            text=[r.exit_reason], textposition="top center",
-            textfont=dict(size=10 if hl else 8),
-            showlegend=False,
-            hovertext=f"exit @{r.exit_price:.2f} {r.pnl:+.0f}$ {rr} ({r.exit_reason})",
-            hoverinfo="text"), row=1, col=1)
-
-    eq = res.equity_curve
-    eqw = eq.iloc[lo:min(hi + 1, len(eq))]
-    fig.add_trace(go.Scatter(x=eqw.index, y=eqw["equity"], mode="lines",
-                             line=dict(width=1.3), showlegend=False), row=2, col=1)
-
-    fig.update_layout(xaxis_rangeslider_visible=False, height=560, dragmode="pan",
-                      margin=dict(t=20, b=10, l=10, r=10),
-                      legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0))
-    st.plotly_chart(fig, use_container_width=True,
-                    config={"scrollZoom": True, "displaylogo": False})
-
-    if sel is not None:
+    if sel is not None and len(trades):
         r = trades.iloc[sel]
         rr = f"{r['r_multiple']:+.2f}R" if _num(r["r_multiple"]) else "?R"
         st.caption(f"**Trade #{sel}** — {r['direction']} {r['size']} lots | "
                    f"entry {pd.Timestamp(r['entry_time']):%Y-%m-%d %H:%M} @{r['entry_price']:.2f} → "
                    f"exit {pd.Timestamp(r['exit_time']):%Y-%m-%d %H:%M} @{r['exit_price']:.2f} "
-                   f"({r['exit_reason']}, {r['pnl']:+.0f}$, {rr}, {int(r['bars_held'])} bars) | "
-                   f"window bars {lo}–{hi} of {n}")
-    else:
-        bar = data.iloc[center]
-        st.caption(f"**Bar {center}/{n - 1}** — {data.index[center]:%Y-%m-%d %H:%M} UTC | "
-                   f"O {bar['open']:.2f} H {bar['high']:.2f} "
-                   f"L {bar['low']:.2f} C {bar['close']:.2f}")
+                   f"({r['exit_reason']}, {r['pnl']:+.0f}$, {rr}, {int(r['bars_held'])} bars)")
+    lo, hi = payload["window"]
+    if (lo, hi) != (0, n - 1):
+        st.caption(f"Large dataset: chart shows bars {lo}–{hi} of {n} "
+                   f"(window follows the selected trade).")

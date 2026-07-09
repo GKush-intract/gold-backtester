@@ -1,7 +1,7 @@
 import pandas as pd
 
-from src.ui_replay import (compute_window, detect_indicator_defaults, parse_overlays,
-                           trade_bar_positions)
+from src.ui_replay import (build_chart_payload, compute_window, detect_indicator_defaults,
+                           parse_overlays, trade_bar_positions)
 
 
 def _index(n=10):
@@ -71,3 +71,62 @@ def test_compute_window_clamps_at_edges():
     assert hi == 9_999 and lo == 9_999 - 200
     lo, hi = compute_window(center=10, span=200, n=50)  # window bigger than data
     assert (lo, hi) == (0, 49)
+
+
+def _mini_backtest():
+    import numpy as np
+    from src.engine import BacktestConfig, run_backtest
+    from src.strategy import Strategy
+
+    idx = pd.date_range("2026-01-05", periods=300, freq="5min", tz="UTC")
+    rng = np.random.default_rng(3)
+    base = 2000 + rng.normal(0, 1.0, 300).cumsum()
+    data = pd.DataFrame({"open": base, "high": base + 1.5, "low": base - 1.5,
+                         "close": base + 0.3, "volume": 1.0}, index=idx)
+    data["high"] = data[["open", "high", "close"]].max(axis=1)
+    data["low"] = data[["open", "low", "close"]].min(axis=1)
+    data.index.name = "timestamp"
+
+    class T(Strategy):
+        name = "t"
+
+        def on_bar(self, ctx):
+            if ctx.position is None and ctx.index % 40 == 10:
+                price = ctx.bar["close"]
+                ctx.enter("long", 0.1, stop_loss=price - 3, take_profit=price + 3)
+
+    res = run_backtest(BacktestConfig(spread=0.0), T(), data)
+    assert len(res.trades) >= 2
+    return res, data
+
+
+def test_chart_payload_structure():
+    res, data = _mini_backtest()
+    p = build_chart_payload(res, data, [("ema", 20)], sel=0, span=100)
+    assert len(p["candles"]) == len(data)
+    t = [c["time"] for c in p["candles"]]
+    assert t == sorted(t) and all(isinstance(x, int) for x in t)
+    assert t[1] - t[0] == 300  # 5min bars -> epoch seconds
+    assert len(p["markers"]) == 2 * len(res.trades)
+    assert p["sl"] and p["tp"] and p["conn"]      # selected trade segments present
+    assert p["overlays"][0]["name"] == "EMA(20)"
+    assert p["equity"]
+    assert p["range"]["from"] < p["range"]["to"]
+
+
+def test_chart_payload_no_selection():
+    res, data = _mini_backtest()
+    p = build_chart_payload(res, data, [], sel=None)
+    assert p["sl"] == [] and p["tp"] == [] and p["conn"] == []
+    assert p["range"] is None
+    assert p["window"] == [0, len(data) - 1]
+
+
+def test_chart_payload_caps_large_datasets():
+    res, data = _mini_backtest()
+    p = build_chart_payload(res, data, [], sel=0, max_bars=100)
+    lo, hi = p["window"]
+    assert hi - lo <= 100
+    assert len(p["candles"]) == hi - lo + 1
+    # selected trade's window is inside the embedded slice
+    assert p["range"] is None or (p["range"]["from"] >= p["candles"][0]["time"])
