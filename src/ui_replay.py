@@ -234,11 +234,22 @@ if (P.equity.length) {{
                                     lastValueVisible: false, title: 'equity' }});
   eq.setData(P.equity);
 }}
-const fit = () => chart.applyOptions({{ width: el.clientWidth }});
+const applyRange = () => {{
+  if (P.logical) chart.timeScale().setVisibleLogicalRange(P.logical);
+  else chart.timeScale().fitContent();
+}};
+// iframe width settles asynchronously; re-apply the initial range on each resize
+// until the user first interacts, else the resize blows the view wide open
+let locked = true;
+el.addEventListener('pointerdown', () => {{ locked = false; }});
+el.addEventListener('wheel', () => {{ locked = false; }});
+const fit = () => {{
+  chart.applyOptions({{ width: el.clientWidth }});
+  if (locked) applyRange();
+}};
 new ResizeObserver(fit).observe(el);
 fit();
-if (P.logical) chart.timeScale().setVisibleLogicalRange(P.logical);
-else chart.timeScale().fitContent();
+setTimeout(fit, 100);
 </script>
 """
 
