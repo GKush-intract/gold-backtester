@@ -239,3 +239,11 @@ def test_partial_fraction_rounding_to_zero_lots_ignored():
     data = make_data([(100, 100, 100, 100)] * 4)
     res = run_backtest(BacktestConfig(spread=0.0), PartialCloser(fraction=0.5, size=0.01), data)
     assert len(res.trades) == 0
+
+
+def test_timeframe_seconds_resolution_independent():
+    # pandas 3.0 uses microsecond index resolution; timeframe_seconds must still be
+    # real seconds (5min bars -> 300), not off by the ns/us unit factor
+    data = make_data([(100, 100, 100, 100)] * 3)
+    res = run_backtest(BacktestConfig(), EnterOnceLong(size=1.0, sl=50, tp=1000), data)
+    assert res.timeframe_seconds == pytest.approx(300.0)

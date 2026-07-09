@@ -8,6 +8,7 @@ import streamlit as st
 
 from src import runner
 from src.builder import interview
+from src.builder.diagnose import DIAG_REQUEST, build_digest
 from src.builder.codegen import (GENERATED_DIR, load_spec, load_strategy_class,
                                  repair_strategy, revise_strategy, save_spec,
                                  write_strategy_file)
@@ -16,6 +17,7 @@ from src.data_loader import load_ohlc, resample
 from src.engine import BacktestConfig
 from src.metrics import compute_metrics
 from src.ui_results import render_param_inputs, render_results
+from src.ui_replay import render_replay
 
 st.set_page_config(page_title="Strategy Builder", layout="wide")
 st.title("🤖 Strategy Builder")
@@ -30,6 +32,7 @@ ss.setdefault("b_code", None)
 ss.setdefault("b_run_requested", False)
 ss.setdefault("b_rev_messages", [])   # revision-interview history (per loaded strategy)
 ss.setdefault("b_rev_plan", None)     # confirmed-pending revision plan card
+ss.setdefault("b_last", None)         # last backtest: (res, m, summary, cfg, elapsed, data)
 
 client = interview.get_client()
 if client is None:
@@ -70,6 +73,7 @@ with st.sidebar:
                 ss.b_spec = load_spec(lpath) or {"name": lcls.name}
                 ss.b_rev_messages = []
                 ss.b_rev_plan = None
+                ss.b_last = None
                 ss.b_display.append(("assistant",
                     f"Loaded `{sel}` (**{lcls.name}**). Describe a change below — I'll ask "
                     "questions if needed and show you a revision plan to confirm before "
@@ -106,7 +110,7 @@ def run_backtest_now():
     res = runner.run_backtest(cfg, strat, data)
     elapsed = (dt.datetime.now() - t0).total_seconds()
     m, summary = compute_metrics(res)
-    render_results(res, m, summary, cfg, elapsed, len(data))
+    ss.b_last = (res, m, summary, cfg, elapsed, data)
 
 
 # ---------------- Chat history ----------------
@@ -227,6 +231,37 @@ if ss.b_run_requested and ss.b_path is not None and strat_cls is not None:
     ss.b_run_requested = False
     with st.spinner("Backtesting…"):
         run_backtest_now()
+
+# ---------------- Last backtest: results, replay, opt-in diagnosis ----------------
+if ss.b_last is not None:
+    res, m, summary, cfg, elapsed, bt_data = ss.b_last
+    render_results(res, m, summary, cfg, elapsed, len(bt_data))
+
+    with st.expander("🎬 Trade replay — step through entries & exits"):
+        render_replay(res, bt_data)
+
+    if ss.b_path is not None:
+        if st.button("🩺 Diagnose with AI",
+                     help="Sends a compact digest of these results + price context to Claude "
+                          "so it can critique the strategy. Nothing is sent unless you click."):
+            ss.b_display.append(("user", "🩺 Diagnose why the strategy is underperforming "
+                                          "(backtest digest attached)"))
+            ss.b_rev_messages.append({"role": "user",
+                                      "content": DIAG_REQUEST + build_digest(res, m, bt_data)})
+            try:
+                with st.spinner("Diagnosing…"):
+                    text, plan = interview.run_revision_turn(
+                        client, ss.b_rev_messages, ss.b_code, spec=ss.b_spec, model=model)
+                if plan is not None:
+                    ss.b_rev_plan = plan
+                if text:
+                    ss.b_display.append(("assistant", text))
+            except (anthropic.APIError, ValueError) as e:
+                ss.b_rev_messages.pop()
+                ss.b_display.pop()
+                st.error(f"Diagnosis failed: {e} — click Diagnose again to retry.")
+            else:
+                st.rerun()
 
 def _pop_dangling_turn(prompt: str) -> None:
     """Undo the just-appended user turn after an API failure so resending doesn't duplicate it."""

@@ -301,8 +301,12 @@ def run_backtest(config: BacktestConfig, strategy: Strategy, data: pd.DataFrame,
 
     trades_df = pd.DataFrame([t.__dict__ for t in trades])
 
-    diffs = np.diff(times.asi8) / 1e9 if n > 1 else np.array([0.0])
-    tf_seconds = float(np.median(diffs)) if n > 1 else 0.0
+    if n > 1:
+        # resolution-independent: pandas 3.0 indexes may be us (not ns), so never
+        # divide asi8 by a hardcoded unit
+        tf_seconds = float(np.median(np.diff(times.to_numpy())) / np.timedelta64(1, "s"))
+    else:
+        tf_seconds = 0.0
 
     return BacktestResult(
         equity_curve=ec, trades=trades_df, config=cfg,
