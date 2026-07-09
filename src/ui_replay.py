@@ -6,6 +6,42 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 WINDOW = 240  # bars shown behind the cursor
+_PALETTE = ["#f39c12", "#3498db", "#9b59b6", "#16a085", "#e67e22", "#7f8c8d"]
+
+
+def detect_indicator_defaults(params: dict | None) -> str:
+    """Overlay spec seeded from a strategy's params: any base-timeframe *ema* period
+    param becomes an EMA overlay (HTF params are excluded — different timeframe)."""
+    if not params:
+        return ""
+    periods = []
+    for k, v in params.items():
+        kl = k.lower()
+        if "ema" in kl and "htf" not in kl:
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                continue
+            if 2 <= n <= 500 and n not in periods:
+                periods.append(n)
+    return ", ".join(f"ema:{n}" for n in sorted(periods))
+
+
+def parse_overlays(spec: str) -> list[tuple[str, int]]:
+    """'ema:33, sma:50' -> [('ema', 33), ('sma', 50)]. Unknown kinds/bad numbers skipped."""
+    out = []
+    for part in (spec or "").split(","):
+        kind, _, num = part.strip().lower().partition(":")
+        kind = kind.strip()
+        if kind not in ("ema", "sma"):
+            continue
+        try:
+            n = int(num.strip())
+        except ValueError:
+            continue
+        if 2 <= n <= 1000 and (kind, n) not in out:
+            out.append((kind, n))
+    return out
 
 
 def trade_bar_positions(trades: pd.DataFrame, index: pd.DatetimeIndex) -> pd.DataFrame:
@@ -31,7 +67,8 @@ def _trade_label(i: int, r) -> str:
             f"→ {r.exit_reason} ({r.pnl:+.0f}$, {rr})")
 
 
-def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_") -> None:
+def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_",
+                  params: dict | None = None) -> None:
     """Bar-by-bar replay of a backtest: candlestick window with entry/exit markers,
     SL/TP segments, trade connectors and the equity curve underneath."""
     trades = trade_bar_positions(res.trades, data.index)
@@ -78,6 +115,12 @@ def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_") -> None:
             _jump(to=int(trades["entry_idx"].iloc[sel]))
 
     cur = st.slider("Bar", 0, n - 1, key=kcur)
+    spec = st.text_input("Indicator overlays", detect_indicator_defaults(params),
+                         key=f"{key_prefix}ind",
+                         help="Comma-separated, computed on the backtest timeframe: "
+                              "ema:33, sma:50. (HTF indicators aren't drawn — "
+                              "different timeframe.)")
+    overlays = parse_overlays(spec)
     lo = max(0, cur - WINDOW)
     win = data.iloc[lo:cur + 1]
 
@@ -86,6 +129,16 @@ def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_") -> None:
     fig.add_trace(go.Candlestick(x=win.index, open=win["open"], high=win["high"],
                                  low=win["low"], close=win["close"], showlegend=False),
                   row=1, col=1)
+
+    for j, (kind, per) in enumerate(overlays):
+        if kind == "ema":
+            series = data["close"].ewm(span=per, adjust=False).mean()
+        else:
+            series = data["close"].rolling(per).mean()
+        fig.add_trace(go.Scatter(x=win.index, y=series.iloc[lo:cur + 1], mode="lines",
+                                 name=f"{kind.upper()}({per})",
+                                 line=dict(width=1.2, color=_PALETTE[j % len(_PALETTE)])),
+                      row=1, col=1)
 
     vis = trades[(trades["exit_idx"] >= lo) & (trades["entry_idx"] <= cur)] if len(trades) else trades
     for r in vis.itertuples():
@@ -131,7 +184,8 @@ def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_") -> None:
                   row=2, col=1)
 
     fig.update_layout(xaxis_rangeslider_visible=False, height=560,
-                      margin=dict(t=20, b=10, l=10, r=10))
+                      margin=dict(t=20, b=10, l=10, r=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0))
     st.plotly_chart(fig, use_container_width=True)
 
     bar = data.iloc[cur]

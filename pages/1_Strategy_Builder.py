@@ -238,7 +238,7 @@ if ss.b_last is not None:
     render_results(res, m, summary, cfg, elapsed, len(bt_data))
 
     with st.expander("🎬 Trade replay — step through entries & exits"):
-        render_replay(res, bt_data)
+        render_replay(res, bt_data, params=param_values or None)
 
     if ss.b_path is not None:
         if st.button("🩺 Diagnose with AI",
