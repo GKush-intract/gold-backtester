@@ -1,6 +1,7 @@
 import pandas as pd
 
-from src.ui_replay import detect_indicator_defaults, parse_overlays, trade_bar_positions
+from src.ui_replay import (compute_window, detect_indicator_defaults, parse_overlays,
+                           trade_bar_positions)
 
 
 def _index(n=10):
@@ -49,3 +50,24 @@ def test_parse_overlays():
     assert parse_overlays("ema:33, sma:50") == [("ema", 33), ("sma", 50)]
     assert parse_overlays("") == []
     assert parse_overlays("macd:12, ema:abc, ema:33, ema:33") == [("ema", 33)]
+
+
+def test_compute_window_centers():
+    lo, hi = compute_window(center=500, span=200, n=10_000)
+    assert (lo, hi) == (400, 600)
+
+
+def test_compute_window_widens_for_long_trade():
+    # a 300-bar trade must fit fully with 20 bars of pad each side
+    lo, hi = compute_window(center=500, span=200, n=10_000, trade_len=300)
+    assert hi - lo >= 300 + 2 * 20
+    assert lo <= 500 - 150 and hi >= 500 + 150
+
+
+def test_compute_window_clamps_at_edges():
+    lo, hi = compute_window(center=5, span=200, n=10_000)
+    assert lo == 0 and hi == 200
+    lo, hi = compute_window(center=9_998, span=200, n=10_000)
+    assert hi == 9_999 and lo == 9_999 - 200
+    lo, hi = compute_window(center=10, span=200, n=50)  # window bigger than data
+    assert (lo, hi) == (0, 49)

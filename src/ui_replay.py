@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-WINDOW = 240  # bars shown behind the cursor
+SPANS = [100, 200, 400, 800]  # selectable window sizes (bars)
 _PALETTE = ["#f39c12", "#3498db", "#9b59b6", "#16a085", "#e67e22", "#7f8c8d"]
 
 
@@ -67,62 +67,98 @@ def _trade_label(i: int, r) -> str:
             f"→ {r.exit_reason} ({r.pnl:+.0f}$, {rr})")
 
 
+def compute_window(center: int, span: int, n: int,
+                   trade_len: int | None = None, pad: int = 20) -> tuple[int, int]:
+    """Inclusive [lo, hi] window of ~`span` bars centered on `center`, clamped to the
+    data. If a selected trade is longer than span - 2*pad, the window widens so the
+    whole trade plus `pad` bars of context on each side stays visible."""
+    eff = span if trade_len is None else max(span, trade_len + 2 * pad)
+    half = eff // 2
+    lo, hi = center - half, center + half
+    if lo < 0:
+        hi -= lo
+        lo = 0
+    if hi > n - 1:
+        lo -= hi - (n - 1)
+        hi = n - 1
+    return max(lo, 0), hi
+
+
 def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_",
                   params: dict | None = None) -> None:
-    """Bar-by-bar replay of a backtest: candlestick window with entry/exit markers,
-    SL/TP segments, trade connectors and the equity curve underneath."""
+    """Trade inspector: pick a trade and the chart centers it — context bars before
+    entry and after exit, entry/exit markers, SL/TP segments, indicator overlays and
+    the equity curve. Scroll with the arrow buttons, the slider, or drag-pan/wheel-zoom
+    directly on the chart."""
     trades = trade_bar_positions(res.trades, data.index)
     n = len(data)
     if n == 0:
         st.info("No data to replay.")
         return
 
-    kcur = f"{key_prefix}cursor"
-    ksel = f"{key_prefix}sel_done"
-    if kcur not in st.session_state:
-        start = int(trades["entry_idx"].iloc[0]) if len(trades) else min(WINDOW, n - 1)
-        st.session_state[kcur] = start
-    st.session_state[kcur] = int(min(max(st.session_state[kcur], 0), n - 1))
+    kcen = f"{key_prefix}center"
+    kdd = f"{key_prefix}sel"
+    kdone = f"{key_prefix}sel_done"
 
-    def _jump(delta=None, to=None):
-        cur = st.session_state[kcur]
-        tgt = to if to is not None else cur + delta
-        st.session_state[kcur] = int(min(max(tgt, 0), n - 1))
+    def _mid(i: int) -> int:
+        return int((trades["entry_idx"].iloc[i] + trades["exit_idx"].iloc[i]) // 2)
 
-    # controls render BEFORE the slider so they may modify its state this run
-    c = st.columns([1.2, 0.8, 0.8, 0.9, 1.2, 3.1])
-    if c[0].button("⏮ prev trade", key=f"{key_prefix}pt"):
-        prev = trades[trades["entry_idx"] < st.session_state[kcur]]
-        if len(prev):
-            _jump(to=int(prev["entry_idx"].iloc[-1]))
-    if c[1].button("◀ −10", key=f"{key_prefix}m10"):
-        _jump(-10)
-    if c[2].button("+1 ▶", key=f"{key_prefix}p1"):
-        _jump(+1)
-    if c[3].button("+10 ▶▶", key=f"{key_prefix}p10"):
-        _jump(+10)
-    if c[4].button("next trade ⏭", key=f"{key_prefix}nt"):
-        nxt = trades[trades["entry_idx"] > st.session_state[kcur]]
-        if len(nxt):
-            _jump(to=int(nxt["entry_idx"].iloc[0]))
+    if kcen not in st.session_state:
+        st.session_state[kcen] = _mid(0) if len(trades) else min(100, n - 1)
+        if len(trades):
+            st.session_state[kdd] = 0
+            st.session_state[kdone] = 0
+    st.session_state[kcen] = int(min(max(st.session_state[kcen], 0), n - 1))
+
+    def _select_trade(i: int) -> None:
+        i = int(min(max(i, 0), len(trades) - 1))
+        st.session_state[kdd] = i
+        st.session_state[kdone] = i
+        st.session_state[kcen] = _mid(i)
+
+    span_key = f"{key_prefix}span"
+    span = st.session_state.get(span_key, 200)
+
+    # buttons render BEFORE the selectbox/slider so they may set widget state this run
+    c = st.columns([1.2, 0.7, 0.7, 1.2, 2.7, 0.9])
+    if c[0].button("⏮ prev trade", key=f"{key_prefix}pt") and len(trades):
+        cur_sel = st.session_state.get(kdd)
+        _select_trade((cur_sel - 1) if cur_sel is not None else 0)
+    if c[1].button("◀", key=f"{key_prefix}sl", help=f"scroll left {span // 2} bars"):
+        st.session_state[kcen] = max(0, st.session_state[kcen] - span // 2)
+    if c[2].button("▶", key=f"{key_prefix}sr", help=f"scroll right {span // 2} bars"):
+        st.session_state[kcen] = min(n - 1, st.session_state[kcen] + span // 2)
+    if c[3].button("next trade ⏭", key=f"{key_prefix}nt") and len(trades):
+        cur_sel = st.session_state.get(kdd)
+        _select_trade((cur_sel + 1) if cur_sel is not None else 0)
+
+    sel = None
     if len(trades):
         labels = {i: _trade_label(i, r) for i, r in enumerate(trades.itertuples())}
-        sel = c[5].selectbox("Jump to trade", options=[None] + list(labels),
-                             format_func=lambda i: "…" if i is None else labels[i],
-                             key=f"{key_prefix}sel", label_visibility="collapsed")
-        if sel is not None and st.session_state.get(ksel) != sel:
-            st.session_state[ksel] = sel
-            _jump(to=int(trades["entry_idx"].iloc[sel]))
+        sel = c[4].selectbox("Trade", options=[None] + list(labels),
+                             format_func=lambda i: "(no trade selected)" if i is None else labels[i],
+                             key=kdd, label_visibility="collapsed")
+        if sel is not None and st.session_state.get(kdone) != sel:
+            # picked from the dropdown: recenter (kdd already holds the new value)
+            st.session_state[kdone] = sel
+            st.session_state[kcen] = _mid(sel)
+    span = c[5].selectbox("Window", SPANS, index=1, key=span_key,
+                          label_visibility="collapsed",
+                          help="Window size in bars — the trade stays centered")
 
-    cur = st.slider("Bar", 0, n - 1, key=kcur)
+    center = st.slider("Center bar", 0, n - 1, key=kcen)
     spec = st.text_input("Indicator overlays", detect_indicator_defaults(params),
                          key=f"{key_prefix}ind",
                          help="Comma-separated, computed on the backtest timeframe: "
                               "ema:33, sma:50. (HTF indicators aren't drawn — "
                               "different timeframe.)")
     overlays = parse_overlays(spec)
-    lo = max(0, cur - WINDOW)
-    win = data.iloc[lo:cur + 1]
+
+    trade_len = None
+    if sel is not None:
+        trade_len = int(trades["exit_idx"].iloc[sel] - trades["entry_idx"].iloc[sel] + 1)
+    lo, hi = compute_window(center, span, n, trade_len)
+    win = data.iloc[lo:hi + 1]
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
                         vertical_spacing=0.03)
@@ -135,70 +171,75 @@ def render_replay(res, data: pd.DataFrame, key_prefix: str = "rp_",
             series = data["close"].ewm(span=per, adjust=False).mean()
         else:
             series = data["close"].rolling(per).mean()
-        fig.add_trace(go.Scatter(x=win.index, y=series.iloc[lo:cur + 1], mode="lines",
+        fig.add_trace(go.Scatter(x=win.index, y=series.iloc[lo:hi + 1], mode="lines",
                                  name=f"{kind.upper()}({per})",
                                  line=dict(width=1.2, color=_PALETTE[j % len(_PALETTE)])),
                       row=1, col=1)
 
-    vis = trades[(trades["exit_idx"] >= lo) & (trades["entry_idx"] <= cur)] if len(trades) else trades
-    for r in vis.itertuples():
+    # explicit axis ranges: markers/lines outside the window must not stretch the view
+    ymin, ymax = float(win["low"].min()), float(win["high"].max())
+    ypad = (ymax - ymin) * 0.08 or 1.0
+    fig.update_xaxes(range=[win.index[0], win.index[-1]], row=1, col=1)
+    fig.update_yaxes(range=[ymin - ypad, ymax + ypad], row=1, col=1)
+
+    vis = trades[(trades["exit_idx"] >= lo) & (trades["entry_idx"] <= hi)] if len(trades) else trades
+    for i, r in zip(vis.index, vis.itertuples()):
         col = "#2ecc71" if r.pnl >= 0 else "#e74c3c"
-        et = data.index[r.entry_idx]
-        open_end = data.index[min(r.exit_idx, cur)]
-        # SL / TP segments for the life of the trade (up to the cursor)
+        hl = (sel is not None and i == sel)
+        et, xt = data.index[r.entry_idx], data.index[r.exit_idx]
         if _num(r.stop_loss):
-            fig.add_trace(go.Scatter(x=[et, open_end], y=[r.stop_loss] * 2, mode="lines",
-                                     line=dict(dash="dash", width=1, color="#e74c3c"),
+            fig.add_trace(go.Scatter(x=[et, xt], y=[r.stop_loss] * 2, mode="lines",
+                                     line=dict(dash="dash", width=2 if hl else 1,
+                                               color="#e74c3c"),
                                      showlegend=False, hoverinfo="skip"), row=1, col=1)
         if _num(r.take_profit):
-            fig.add_trace(go.Scatter(x=[et, open_end], y=[r.take_profit] * 2, mode="lines",
-                                     line=dict(dash="dash", width=1, color="#2ecc71"),
+            fig.add_trace(go.Scatter(x=[et, xt], y=[r.take_profit] * 2, mode="lines",
+                                     line=dict(dash="dash", width=2 if hl else 1,
+                                               color="#2ecc71"),
                                      showlegend=False, hoverinfo="skip"), row=1, col=1)
-        if lo <= r.entry_idx <= cur:
-            fig.add_trace(go.Scatter(
-                x=[et], y=[r.entry_price], mode="markers",
-                marker=dict(symbol="triangle-up" if r.direction == "long" else "triangle-down",
-                            size=12, color="#2ecc71" if r.direction == "long" else "#e74c3c",
-                            line=dict(width=1, color="#333")),
-                showlegend=False,
-                hovertext=f"entry {r.direction} @{r.entry_price:.2f} [{r.tag}] size {r.size}",
-                hoverinfo="text"), row=1, col=1)
-        if lo <= r.exit_idx <= cur:
-            xt = data.index[r.exit_idx]
-            rr = f"{r.r_multiple:+.2f}R" if _num(r.r_multiple) else "?R"
-            fig.add_trace(go.Scatter(
-                x=[xt], y=[r.exit_price], mode="markers+text",
-                marker=dict(symbol="x", size=11, color=col),
-                text=[r.exit_reason], textposition="top center", textfont=dict(size=9),
-                showlegend=False,
-                hovertext=f"exit @{r.exit_price:.2f} {r.pnl:+.0f}$ {rr} ({r.exit_reason})",
-                hoverinfo="text"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=[et, xt], y=[r.entry_price, r.exit_price], mode="lines",
-                                     line=dict(dash="dot", width=1, color=col),
-                                     showlegend=False, hoverinfo="skip"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[et, xt], y=[r.entry_price, r.exit_price], mode="lines",
+                                 line=dict(dash="dot", width=2 if hl else 1, color=col),
+                                 showlegend=False, hoverinfo="skip"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=[et], y=[r.entry_price], mode="markers",
+            marker=dict(symbol="triangle-up" if r.direction == "long" else "triangle-down",
+                        size=16 if hl else 11,
+                        color="#2ecc71" if r.direction == "long" else "#e74c3c",
+                        line=dict(width=1, color="#333")),
+            showlegend=False,
+            hovertext=f"entry {r.direction} @{r.entry_price:.2f} [{r.tag}] size {r.size}",
+            hoverinfo="text"), row=1, col=1)
+        rr = f"{r.r_multiple:+.2f}R" if _num(r.r_multiple) else "?R"
+        fig.add_trace(go.Scatter(
+            x=[xt], y=[r.exit_price], mode="markers+text",
+            marker=dict(symbol="x", size=15 if hl else 10, color=col),
+            text=[r.exit_reason], textposition="top center",
+            textfont=dict(size=10 if hl else 8),
+            showlegend=False,
+            hovertext=f"exit @{r.exit_price:.2f} {r.pnl:+.0f}$ {rr} ({r.exit_reason})",
+            hoverinfo="text"), row=1, col=1)
 
     eq = res.equity_curve
-    eqw = eq.iloc[lo:min(cur + 1, len(eq))]
+    eqw = eq.iloc[lo:min(hi + 1, len(eq))]
     fig.add_trace(go.Scatter(x=eqw.index, y=eqw["equity"], mode="lines",
-                             line=dict(width=1.3), name="equity", showlegend=False),
-                  row=2, col=1)
+                             line=dict(width=1.3), showlegend=False), row=2, col=1)
 
-    fig.update_layout(xaxis_rangeslider_visible=False, height=560,
+    fig.update_layout(xaxis_rangeslider_visible=False, height=560, dragmode="pan",
                       margin=dict(t=20, b=10, l=10, r=10),
                       legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True,
+                    config={"scrollZoom": True, "displaylogo": False})
 
-    bar = data.iloc[cur]
-    line = (f"**Bar {cur}/{n - 1}** — {data.index[cur]:%Y-%m-%d %H:%M} UTC | "
-            f"O {bar['open']:.2f} H {bar['high']:.2f} L {bar['low']:.2f} C {bar['close']:.2f}")
-    if len(trades):
-        open_now = trades[(trades["entry_idx"] <= cur) & (trades["exit_idx"] > cur)]
-        if len(open_now):
-            r0 = open_now.iloc[0]
-            sl = f"{r0.stop_loss:.2f}" if _num(r0.stop_loss) else "—"
-            tp = f"{r0.take_profit:.2f}" if _num(r0.take_profit) else "—"
-            upnl = (bar["close"] - r0.entry_price) * (1 if r0.direction == "long" else -1) \
-                   * r0["size"] * 100
-            line += (f" | 📌 open {r0.direction} {r0['size']} lots @{r0.entry_price:.2f} "
-                     f"SL {sl} TP {tp} (u-pnl {upnl:+.0f}$)")
-    st.caption(line)
+    if sel is not None:
+        r = trades.iloc[sel]
+        rr = f"{r['r_multiple']:+.2f}R" if _num(r["r_multiple"]) else "?R"
+        st.caption(f"**Trade #{sel}** — {r['direction']} {r['size']} lots | "
+                   f"entry {pd.Timestamp(r['entry_time']):%Y-%m-%d %H:%M} @{r['entry_price']:.2f} → "
+                   f"exit {pd.Timestamp(r['exit_time']):%Y-%m-%d %H:%M} @{r['exit_price']:.2f} "
+                   f"({r['exit_reason']}, {r['pnl']:+.0f}$, {rr}, {int(r['bars_held'])} bars) | "
+                   f"window bars {lo}–{hi} of {n}")
+    else:
+        bar = data.iloc[center]
+        st.caption(f"**Bar {center}/{n - 1}** — {data.index[center]:%Y-%m-%d %H:%M} UTC | "
+                   f"O {bar['open']:.2f} H {bar['high']:.2f} "
+                   f"L {bar['low']:.2f} C {bar['close']:.2f}")
