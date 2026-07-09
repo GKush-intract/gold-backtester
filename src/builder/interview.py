@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -59,11 +60,7 @@ FINALIZE_SPEC_TOOL = {
     },
 }
 
-SYSTEM_PROMPT = """\
-You are a trading-strategy analyst for a gold (XAUUSD) backtesting engine. Your job is to \
-interview the user about the strategy they describe until every detail needed to implement \
-it is pinned down, then call the finalize_spec tool.
-
+_ENGINE_CAPABILITIES = """\
 ## Engine capabilities (spec ONLY within these)
 - Market entries filled at the NEXT bar open (plus spread/slippage costs)
 - Absolute stop-loss and take-profit prices per position
@@ -79,7 +76,15 @@ at the next bar open; the remainder keeps its SL/TP/trailing stop and R is pro-r
 ## NOT supported — if the user asks, offer the nearest supported alternative
 - Limit/stop entry orders (only market at next open)
 - Pyramiding / adding to an open position, multiple concurrent positions
-- Tick data (bars only), multi-symbol strategies
+- Tick data (bars only), multi-symbol strategies\
+"""
+
+SYSTEM_PROMPT = f"""\
+You are a trading-strategy analyst for a gold (XAUUSD) backtesting engine. Your job is to \
+interview the user about the strategy they describe until every detail needed to implement \
+it is pinned down, then call the finalize_spec tool.
+
+{_ENGINE_CAPABILITIES}
 
 ## Interview rules
 - Ask ONE focused question at a time. Keep questions short and concrete.
@@ -127,15 +132,17 @@ def _validate_spec(spec: dict) -> list[str]:
     return missing
 
 
-def run_interview_turn(client, messages: list, model: str = DEFAULT_MODEL) -> tuple[str, dict | None]:
-    """One assistant turn. Appends the assistant turn (and tool_result answers for any
-    tool calls) to `messages` itself — callers only append user turns. Returns
-    (display_text, spec_or_None)."""
+def _tool_turn(client, messages: list, model: str, system: str, tool: dict,
+               validate_fn, ok_ack: str, reject_label: str) -> tuple[str, dict | None]:
+    """Shared chat-turn core for the creation and revision interviews. Appends the
+    assistant turn (and tool_result answers for any tool calls) to `messages` itself —
+    callers only append user turns. Returns (display_text, tool_payload_or_None)."""
     response = client.messages.create(
         model=model,
         max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        tools=[FINALIZE_SPEC_TOOL],
+        cache_control={"type": "ephemeral"},
+        system=system,
+        tools=[tool],
         tool_choice={"type": "auto", "disable_parallel_tool_use": True},
         messages=messages,
     )
@@ -160,23 +167,104 @@ def run_interview_turn(client, messages: list, model: str = DEFAULT_MODEL) -> tu
 
     messages.append({"role": "assistant", "content": assistant_blocks})
 
-    spec = None
+    payload = None
     results = []
     for i, tu in enumerate(tool_uses):
-        if tu.name != "finalize_spec" or i > 0:
+        if tu.name != tool["name"] or i > 0:
             results.append({"type": "tool_result", "tool_use_id": tu.id, "is_error": True,
-                            "content": "Ignored — only one finalize_spec call per turn."})
+                            "content": f"Ignored — only one {tool['name']} call per turn."})
             continue
-        missing = _validate_spec(tu.input)
+        missing = validate_fn(tu.input)
         if missing:
             results.append({"type": "tool_result", "tool_use_id": tu.id, "is_error": True,
-                            "content": f"Spec rejected — missing/invalid fields: "
+                            "content": f"{reject_label} — missing/invalid fields: "
                                        f"{', '.join(missing)}. Ask the user for these."})
-            text += (f"\n\n(Spec rejected — missing fields: {', '.join(missing)}. "
+            text += (f"\n\n({reject_label} — missing fields: {', '.join(missing)}. "
                      "Please continue the conversation to fill them in.)")
         else:
-            spec = dict(tu.input)
-            results.append({"type": "tool_result", "tool_use_id": tu.id,
-                            "content": "Spec recorded and shown to the user as a card."})
+            payload = dict(tu.input)
+            results.append({"type": "tool_result", "tool_use_id": tu.id, "content": ok_ack})
     messages.append({"role": "user", "content": results})
-    return text, spec
+    return text, payload
+
+
+def run_interview_turn(client, messages: list, model: str = DEFAULT_MODEL) -> tuple[str, dict | None]:
+    """One creation-interview turn. Returns (display_text, spec_or_None)."""
+    return _tool_turn(client, messages, model, SYSTEM_PROMPT, FINALIZE_SPEC_TOOL,
+                      _validate_spec, "Spec recorded and shown to the user as a card.",
+                      "Spec rejected")
+
+
+FINALIZE_REVISION_TOOL = {
+    "name": "finalize_revision",
+    "description": (
+        "Record the agreed revision plan for the existing strategy. Call this ONLY when the "
+        "requested change is fully pinned down — ask clarifying questions first if anything is "
+        "ambiguous (indicator variant, periods, timeframes, how it interacts with the existing "
+        "logic, which new tunable parameters to expose). The plan is handed to a separate "
+        "implementer AFTER the user confirms it; do not write code yourself."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string",
+                        "description": "One-paragraph description of the revision"},
+            "changes": {"type": "array", "items": {"type": "string"},
+                        "description": "Concrete, complete change list for the implementer. "
+                                       "Every new tunable value must appear as a new params "
+                                       "entry with type/default/min/max/help."},
+        },
+        "required": ["summary", "changes"],
+    },
+}
+
+
+def _validate_revision(plan: dict) -> list[str]:
+    missing = []
+    if not plan.get("summary"):
+        missing.append("summary")
+    changes = plan.get("changes")
+    if not isinstance(changes, list) or not changes:
+        missing.append("changes")
+    return missing
+
+
+def _revision_system(code: str, spec: dict | None) -> str:
+    spec_txt = json.dumps(spec, indent=2) if spec else "(no saved spec)"
+    return f"""\
+You are a trading-strategy analyst helping revise an EXISTING strategy for a gold (XAUUSD) \
+backtesting engine. Discuss the user's requested change; when anything is ambiguous ask ONE \
+focused clarifying question at a time; once the change is fully pinned down give a one-line \
+summary and call the finalize_revision tool. Do NOT write code — the confirmed plan goes to a \
+separate implementer.
+
+{_ENGINE_CAPABILITIES}
+
+## Revision rules
+- Small unambiguous tweaks ("change the EMA default to 21") need no questions — call \
+finalize_revision immediately.
+- Ambiguous requests ("add a trend filter") DO need pinning down: which indicator, what \
+period, which timeframe, how it gates entries/exits, and which new tunable parameters to \
+expose (with default/min/max).
+- If the user asks for something the engine cannot do, say so and offer the nearest \
+supported alternative.
+
+## Current strategy spec
+{spec_txt}
+
+## Current strategy code
+```python
+{code}
+```
+"""
+
+
+def run_revision_turn(client, messages: list, code: str, spec: dict | None = None,
+                      model: str = DEFAULT_MODEL) -> tuple[str, dict | None]:
+    """One revision-interview turn about an existing strategy. Returns
+    (display_text, revision_plan_or_None). Same history-ownership contract as
+    run_interview_turn."""
+    return _tool_turn(client, messages, model, _revision_system(code, spec),
+                      FINALIZE_REVISION_TOOL, _validate_revision,
+                      "Revision plan recorded and shown to the user for confirmation.",
+                      "Revision plan rejected")

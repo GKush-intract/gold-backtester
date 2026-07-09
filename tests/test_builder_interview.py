@@ -98,3 +98,41 @@ def test_truncated_response_flagged():
         content=[_text_block("partial answer")], stop_reason="max_tokens")
     text, spec = interview.run_interview_turn(client, [{"role": "user", "content": "hi"}])
     assert "truncated" in text
+
+
+def _rev_tool_block(plan):
+    return SimpleNamespace(type="tool_use", name="finalize_revision", input=plan, id="tu_r1")
+
+
+VALID_PLAN = {"summary": "Add an H4 EMA trend filter gating long entries.",
+              "changes": ["Add param htf_ema_period (int, 21, 3, 200)",
+                          "Only enter when H4 close > H4 EMA(htf_ema_period)"]}
+
+
+def test_revision_turn_question_passthrough():
+    client = _mock_client([_text_block("Which timeframe should the filter use?")])
+    history = [{"role": "user", "content": "add a trend filter"}]
+    text, plan = interview.run_revision_turn(client, history, code="CODE", spec={"name": "X"})
+    assert plan is None
+    assert "timeframe" in text
+    assert history[-1] == {"role": "assistant", "content": "Which timeframe should the filter use?"}
+    # current code + spec are embedded in the system prompt
+    system = client.messages.create.call_args.kwargs["system"]
+    assert "CODE" in system and '"name": "X"' in system
+
+
+def test_revision_turn_returns_plan_and_acks():
+    client = _mock_client([_text_block("Plan ready."), _rev_tool_block(VALID_PLAN)])
+    history = [{"role": "user", "content": "gate entries on H4 trend, EMA 21"}]
+    text, plan = interview.run_revision_turn(client, history, code="CODE")
+    assert plan == VALID_PLAN
+    ack = history[-1]["content"][0]
+    assert ack["type"] == "tool_result" and "is_error" not in ack
+
+
+def test_revision_turn_rejects_empty_changes():
+    client = _mock_client([_rev_tool_block({"summary": "do stuff", "changes": []})])
+    text, plan = interview.run_revision_turn(client, [{"role": "user", "content": "x"}], code="C")
+    assert plan is None
+    assert "missing" in text.lower()
+    assert "changes" in text

@@ -28,6 +28,8 @@ ss.setdefault("b_spec", None)
 ss.setdefault("b_path", None)        # Path of the session's strategy file
 ss.setdefault("b_code", None)
 ss.setdefault("b_run_requested", False)
+ss.setdefault("b_rev_messages", [])   # revision-interview history (per loaded strategy)
+ss.setdefault("b_rev_plan", None)     # confirmed-pending revision plan card
 
 client = interview.get_client()
 if client is None:
@@ -66,9 +68,12 @@ with st.sidebar:
                 ss.b_path = lpath
                 ss.b_code = lpath.read_text()
                 ss.b_spec = load_spec(lpath) or {"name": lcls.name}
+                ss.b_rev_messages = []
+                ss.b_rev_plan = None
                 ss.b_display.append(("assistant",
-                    f"Loaded `{sel}` (**{lcls.name}**). Chat below to revise it with AI, "
-                    "or tune its parameters here and hit Run."))
+                    f"Loaded `{sel}` (**{lcls.name}**). Describe a change below — I'll ask "
+                    "questions if needed and show you a revision plan to confirm before "
+                    "touching the code. Or just tune params here and hit Run."))
                 st.rerun()
             except Exception as e:
                 st.warning(f"Could not load {sel}: {e}")
@@ -142,6 +147,8 @@ if ss.b_spec is not None and ss.b_path is None:
                 if result["ok"]:
                     ss.b_path = path
                     save_spec(path, spec)  # sidecar lets future sessions reload intent
+                    ss.b_rev_messages = []
+                    ss.b_rev_plan = None
                     if result.get("warning"):
                         st.warning(result["warning"])
                     status.update(label=f"✅ {path.name} validated "
@@ -155,6 +162,62 @@ if ss.b_spec is not None and ss.b_path is None:
                     st.code(result["error"] or "unknown error")
                     st.info("Keep chatting below to revise the spec, then generate again.")
 
+# ---------------- Revision plan card ----------------
+if ss.b_rev_plan is not None and ss.b_path is not None:
+    plan = ss.b_rev_plan
+    with st.container(border=True):
+        st.subheader("🔧 Revision plan")
+        st.markdown(plan["summary"])
+        for ch in plan.get("changes", []):
+            st.markdown(f"- {ch}")
+        st.caption("Not right? Keep chatting below to refine the plan — nothing changes "
+                   "until you apply.")
+        if st.button("✅ Apply changes & re-run", type="primary"):
+            request = (plan["summary"] + "\n\nApply exactly these changes:\n"
+                       + "\n".join(f"- {c}" for c in plan.get("changes", [])))
+            old_code = ss.b_code
+            ok = False
+            try:
+                with st.status("Revising strategy…", expanded=True) as status:
+                    st.write("Asking Claude for the updated file…")
+                    code = revise_strategy(client, ss.b_code, request, model=model)
+                    write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
+                    st.write("Validating…")
+                    result = validate_strategy(ss.b_path, csv_path=_csv_path())
+                    attempts = 1
+                    while not result["ok"] and attempts < 3:
+                        st.write("Validation failed — asking Claude to fix it…")
+                        code = repair_strategy(client, code, result["error"], model=model)
+                        write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
+                        result = validate_strategy(ss.b_path, csv_path=_csv_path())
+                        attempts += 1
+                    ok = result["ok"]
+                    if ok:
+                        ss.b_code = code
+                        status.update(label="✅ Revision validated", state="complete")
+                        ss.b_display.append(("assistant",
+                                             "Applied the plan — re-running the backtest."))
+                        ss.b_run_requested = True
+                    else:
+                        status.update(label="❌ Revision failed — previous version restored",
+                                      state="error")
+                        ss.b_display.append(("assistant",
+                            "Applying the plan failed validation, so I restored the previous "
+                            "working version. Last error:\n```\n"
+                            + (result["error"] or "unknown")[-1500:] + "\n```\n"
+                            "Refine the plan below and apply again."))
+            except anthropic.APIError as e:
+                st.error(f"Claude API error: {e} — click Apply again to retry.")
+            except ValueError as e:
+                st.error(f"Code generation problem: {e} — click Apply again to retry.")
+            finally:
+                if not ok:
+                    write_strategy_file(old_code, ss.b_spec["name"], path=ss.b_path)
+            if ok:
+                ss.b_rev_plan = None
+                ss.b_rev_messages = []   # next revision interviews against the NEW code
+            st.rerun()
+
 # ---------------- Generated code + results ----------------
 if ss.b_code:
     with st.expander(f"📄 Generated code ({ss.b_path.name if ss.b_path else 'not validated'})"):
@@ -167,16 +230,17 @@ if ss.b_run_requested and ss.b_path is not None and strat_cls is not None:
 
 def _pop_dangling_turn(prompt: str) -> None:
     """Undo the just-appended user turn after an API failure so resending doesn't duplicate it."""
-    if ss.b_messages and ss.b_messages[-1] == {"role": "user", "content": prompt}:
-        ss.b_messages.pop()
+    for hist in (ss.b_messages, ss.b_rev_messages):
+        if hist and hist[-1] == {"role": "user", "content": prompt}:
+            hist.pop()
     if ss.b_display and ss.b_display[-1] == ("user", prompt):
         ss.b_display.pop()
 
 
 # ---------------- Chat input ----------------
 placeholder = ("Describe your strategy (e.g. 'Buy when Elder Force Index turns positive…')"
-               if ss.b_spec is None else
-               "Revise the spec or the code (e.g. 'use EMA 21 for the EFI smoothing')")
+               if ss.b_path is None else
+               "Describe a change — I'll confirm a plan with you before editing the code")
 if prompt := st.chat_input(placeholder):
     ss.b_display.append(("user", prompt))
     with st.chat_message("user"):
@@ -195,42 +259,16 @@ if prompt := st.chat_input(placeholder):
                 ss.b_display.append(("assistant", text))
             st.rerun()
         else:
-            # logic-revision mode: current file + request -> full new file -> validate/repair.
-            # On any failure the previous working version is restored (disk + session).
-            old_code = ss.b_code
-            ok = False
-            try:
-                with st.status("Revising strategy…", expanded=True) as status:
-                    st.write("Asking Claude for the updated file…")
-                    code = revise_strategy(client, ss.b_code, prompt, model=model)
-                    write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
-                    st.write("Validating…")
-                    result = validate_strategy(ss.b_path, csv_path=_csv_path())
-                    attempts = 1
-                    while not result["ok"] and attempts < 3:
-                        st.write("Validation failed — asking Claude to fix it…")
-                        code = repair_strategy(client, code, result["error"], model=model)
-                        write_strategy_file(code, ss.b_spec["name"], path=ss.b_path)
-                        result = validate_strategy(ss.b_path, csv_path=_csv_path())
-                        attempts += 1
-                    ok = result["ok"]
-                    if ok:
-                        ss.b_code = code
-                        status.update(label="✅ Revision validated", state="complete")
-                        ss.b_display.append(("assistant",
-                                             "Updated the strategy — re-running the backtest."))
-                        ss.b_run_requested = True
-                    else:
-                        status.update(label="❌ Revision failed — previous version restored",
-                                      state="error")
-                        ss.b_display.append(("assistant",
-                            "That revision failed validation, so I restored the previous "
-                            "working version. Last error:\n```\n"
-                            + (result["error"] or "unknown")[-1500:] + "\n```"))
-            finally:
-                if not ok:
-                    # roll back the session file so the working strategy is never lost
-                    write_strategy_file(old_code, ss.b_spec["name"], path=ss.b_path)
+            # revision-interview mode: discuss -> plan card -> user confirms -> apply.
+            # run_revision_turn owns ALL history mutation — only append user turns.
+            ss.b_rev_messages.append({"role": "user", "content": prompt})
+            with st.spinner("Thinking…"):
+                text, plan = interview.run_revision_turn(
+                    client, ss.b_rev_messages, ss.b_code, spec=ss.b_spec, model=model)
+            if plan is not None:
+                ss.b_rev_plan = plan
+            if text:
+                ss.b_display.append(("assistant", text))
             st.rerun()
     except anthropic.RateLimitError:
         _pop_dangling_turn(prompt)

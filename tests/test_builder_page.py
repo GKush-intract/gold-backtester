@@ -13,5 +13,6 @@ def test_page_exists_and_parses():
 def test_page_uses_shared_modules():
     src = PAGE.read_text()
     for needle in ["src.builder", "render_results", "render_param_inputs",
-                   "generate_validated", "run_interview_turn"]:
+                   "generate_validated", "run_interview_turn", "run_revision_turn",
+                   "Revision plan"]:
         assert needle in src, f"page should use {needle}"
