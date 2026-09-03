@@ -1,0 +1,101 @@
+{
+  "name": "Sachin VWAP Confluence",
+  "description": "A 1-minute XAUUSD strategy based on VWAP crossovers confirmed by three momentum filters: CCI(20) > 0, MACD(12,26,9) histogram > 0, and price above EMA(33) for longs (all inverted for shorts). A noise filter requires the closing price to be at least minClear points beyond VWAP, and a cooldown prevents re-entry within coolBars bars of the last signal. Stop-loss is set at the tighter of a fixed max-stop distance or the lowest low (highest high for shorts) of the last n bars. 50% of the position is closed at 2R; the remaining 50% is trailed by 1\u00d7 the initial SL distance. Sized at 1% equity risk per trade.",
+  "timeframe": "m1",
+  "buy_condition": "1) ta.crossover(close, vwap) on the current bar; 2) close > vwap + min_clear; 3) CCI(cci_period, hlc3) > 0; 4) MACD(macd_fast, macd_slow, macd_signal) histogram > 0; 5) close > EMA(ema_period); 6) bars since last signal (long or short) > cool_bars. All conditions must be true simultaneously. Enter long at the NEXT bar open.",
+  "sell_condition": "SHORT entry (mirror): 1) ta.crossunder(close, vwap); 2) close < vwap - min_clear; 3) CCI < 0; 4) MACD histogram < 0; 5) close < EMA(ema_period); 6) cooldown satisfied. Enter short at NEXT bar open. Exit (both sides): (a) SL hit; (b) 50% partial close when price reaches entry \u00b1 2 \u00d7 SL_distance (TP1); (c) remaining 50% trailed by 1 \u00d7 SL_distance from the high-water mark after TP1 is hit.",
+  "tp_sl_strategy": "For LONG: SL_distance = min(max_stop_pts, entry_price - lowest_low(sl_lookback bars before entry)). SL price = entry - SL_distance. TP1 price = entry + 2 \u00d7 SL_distance \u2192 close 50% of position (fraction=0.5) at next bar open after TP1 is reached. After TP1: activate trailing stop on remaining 50% with trail distance = 1 \u00d7 SL_distance (trails intrabar from the peak). For SHORT: mirror all directions. Max stop cap (max_stop_pts) and lookback (sl_lookback) are tunable parameters.",
+  "risk_management": "Risk 1% of current equity per trade. Lot size = (equity \u00d7 risk_pct / 100) / (SL_distance \u00d7 100). Maximum leverage cap of 20\u00d7. Minimum lot step 0.01. Only one open position at a time.",
+  "parameters": [
+    {
+      "name": "min_clear",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 10.0,
+      "help": "Minimum distance (pts) the close must be beyond VWAP for a valid cross signal"
+    },
+    {
+      "name": "cool_bars",
+      "type": "int",
+      "default": 15,
+      "min": 0,
+      "max": 200,
+      "help": "Cooldown in bars after any signal (long or short) before a new signal is allowed"
+    },
+    {
+      "name": "ema_period",
+      "type": "int",
+      "default": 33,
+      "min": 5,
+      "max": 200,
+      "help": "Period for the EMA trend filter"
+    },
+    {
+      "name": "cci_period",
+      "type": "int",
+      "default": 20,
+      "min": 5,
+      "max": 100,
+      "help": "Period for the CCI momentum filter (applied to hlc3)"
+    },
+    {
+      "name": "macd_fast",
+      "type": "int",
+      "default": 12,
+      "min": 2,
+      "max": 50,
+      "help": "MACD fast EMA period"
+    },
+    {
+      "name": "macd_slow",
+      "type": "int",
+      "default": 26,
+      "min": 5,
+      "max": 100,
+      "help": "MACD slow EMA period"
+    },
+    {
+      "name": "macd_signal",
+      "type": "int",
+      "default": 9,
+      "min": 2,
+      "max": 50,
+      "help": "MACD signal EMA period"
+    },
+    {
+      "name": "sl_lookback",
+      "type": "int",
+      "default": 3,
+      "min": 1,
+      "max": 20,
+      "help": "Number of bars to look back for the swing low (long) or swing high (short) to anchor the stop-loss"
+    },
+    {
+      "name": "max_stop_pts",
+      "type": "float",
+      "default": 5.0,
+      "min": 1.0,
+      "max": 50.0,
+      "help": "Maximum allowed stop-loss distance in points; SL = min(max_stop_pts, swing-based distance)"
+    },
+    {
+      "name": "risk_pct",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.1,
+      "max": 5.0,
+      "help": "Percentage of equity risked per trade for position sizing"
+    },
+    {
+      "name": "max_leverage",
+      "type": "float",
+      "default": 20.0,
+      "min": 1.0,
+      "max": 100.0,
+      "help": "Maximum leverage cap applied to computed lot size"
+    }
+  ],
+  "htf_timeframes": [],
+  "notes": "1. VWAP is session-anchored (daily reset) computed from hlc3, matching TradingView's built-in ta.vwap(hlc3). 2. The swing-low SL lookback uses the lowest low of the sl_lookback bars immediately before entry (not including the entry bar) to avoid look-ahead. 3. The TP1 partial close and trailing stop activation both execute at the next bar open after the threshold is breached intrabar \u2014 this is a one-position engine so no pyramiding. 4. The cooldown timer resets on both long and short signals. 5. MACD histogram = MACD line minus signal line."
+}

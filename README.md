@@ -2,13 +2,46 @@
 
 Local, single-user backtester for gold (XAUUSD). Fetches candles from Dukascopy, runs plug-in
 strategies through a correctness-focused bar-by-bar engine, and shows results in a Streamlit UI.
+Also includes a natural-language **Strategy Builder** (Claude writes the strategy code for you)
+and a standalone **market replayer** for practising discretionary trading on historical data.
 
-## Setup
+## Quickstart
 
 ```bash
-python3 -m venv .venv
+git clone <this repo> && cd gold-backtester
+python3 -m venv .venv                      # Python 3.11+ (developed on 3.13)
 .venv/bin/pip install -r requirements.txt
+.venv/bin/pytest                           # sanity check, ~10s
+.venv/bin/streamlit run app.py             # opens http://localhost:8501
 ```
+
+In the UI pick a date range, a strategy, tweak its params in the sidebar, and hit run. The first
+run for a date range downloads candles from Dukascopy (free, no account) and caches them under
+`data/cache/`. Price data is **not** committed to the repo.
+
+For the Strategy Builder page you need an Anthropic API key:
+
+```bash
+cp .env.example .env    # then paste your key into .env
+```
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `app.py`, `pages/` | Streamlit UI: classic backtester + Strategy Builder page |
+| `run_cli.py` | Headless runner (synthetic data or real fetch) |
+| `src/engine.py` | Bar-by-bar backtest engine (fills, SL/TP, trailing, costs, leverage) |
+| `src/strategy.py` | `Strategy` base class + `ctx` API strategies use |
+| `src/data_fetcher.py`, `src/data_loader.py` | Dukascopy fetch + CSV loading/validation |
+| `src/metrics.py` | Equity, drawdown, Sharpe/Sortino, trade stats |
+| `src/ui_results.py`, `src/ui_replay.py` | Results tables/charts and the trade replay chart |
+| `src/strategies/` | Built-in strategies (`ma_crossover`, `smc_sweep`, `shalabh`, template) |
+| `src/strategies/generated/` | Strategies produced by the Strategy Builder (+ their `.spec.json`) |
+| `src/builder/` | NL Strategy Builder: interview → codegen → sandbox validate → diagnose |
+| `replayer/` | Standalone live-market replayer (FastAPI + websockets) |
+| `scripts/build_m1_csv.py` | Bulk-download M1 XAUUSD from Dukascopy into a CSV |
+| `tests/` | pytest suite (engine, loader, builder, replayer, UI payloads) |
 
 ## Run
 

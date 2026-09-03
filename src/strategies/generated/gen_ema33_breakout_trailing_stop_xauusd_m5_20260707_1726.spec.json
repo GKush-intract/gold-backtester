@@ -1,0 +1,69 @@
+{
+  "name": "EMA33 Breakout Trailing Stop - XAUUSD M5",
+  "description": "Long-only M5 breakout: enter when a bar closes above EMA(33); initial SL anchored per sl_mode with an ATR minimum-distance floor; TRUE partial close (ctx.close fraction) at 1R; runner keeps original SL with strategy-managed breakeven exit (bar close <= entry) and take-profit at runner_target_r * R.",
+  "timeframe": "m5",
+  "htf_timeframes": [],
+  "buy_condition": "Bar closes above EMA(ema_period=33)",
+  "sell_condition": "Initial SL (engine, intrabar); after 1R partial: breakeven exit on bar close <= entry, or runner target at entry + runner_target_r * R",
+  "tp_sl_strategy": "SL = min(sl_mode anchor, entry - min_stop_atr_mult*ATR); partial_fraction closed at +1R; runner TP at +runner_target_r R (bar-checked, next-open fill)",
+  "risk_management": "risk_pct% equity risk per trade via size_for_risk; 20x leverage cap",
+  "parameters": [
+    {
+      "name": "ema_period",
+      "type": "int",
+      "default": 33,
+      "min": 5,
+      "max": 200,
+      "help": "EMA period"
+    },
+    {
+      "name": "risk_pct",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.1,
+      "max": 5.0,
+      "help": "% equity risk per trade"
+    },
+    {
+      "name": "atr_period",
+      "type": "int",
+      "default": 14,
+      "min": 2,
+      "max": 100,
+      "help": "ATR period for min stop"
+    },
+    {
+      "name": "min_stop_atr_mult",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.1,
+      "max": 5.0,
+      "help": "Min stop distance in ATRs"
+    },
+    {
+      "name": "sl_mode",
+      "type": "str",
+      "default": "lowest",
+      "min": "",
+      "max": "",
+      "help": "SL anchor: ema|candle_low|candle_open|lowest"
+    },
+    {
+      "name": "partial_fraction",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.1,
+      "max": 0.9,
+      "help": "Fraction closed at 1R"
+    },
+    {
+      "name": "runner_target_r",
+      "type": "float",
+      "default": 2.0,
+      "min": 0.5,
+      "max": 10.0,
+      "help": "Runner TP in R"
+    }
+  ],
+  "notes": "Converted 2026-07-07 from close-and-re-enter runner emulation to a true engine partial close. Engine cannot move SL/TP post-entry: runner breakeven/target are bar-close checks filled at next open; initial SL remains the intrabar backstop."
+}

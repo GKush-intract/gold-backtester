@@ -1,0 +1,77 @@
+{
+  "name": "EMA33 Crossover Ladder Gold m1",
+  "description": "A momentum entry strategy on XAUUSD m1 bars. A long is triggered when the signal candle opens below EMA(33) and closes above it, confirming the 3 prior candles had their entire range (high and low) below the EMA, and the signal candle's range is within a tunable ATR multiple to avoid chasing extended moves. The stop-loss is the signal candle's open. The position is scaled out in a doubling ladder: 50% is closed at 2R, then the stop moves to 2R and target becomes 4R; at 4R another 50% of the remainder is closed, stop moves to 4R, target becomes 8R, and so on. Sized by fixed risk percent of equity.",
+  "timeframe": "m1",
+  "buy_condition": "1) EMA(ema_period) is computed on close. 2) Signal candle: open &lt; EMA and close &gt; EMA. 3) For each of the 3 candles immediately before the signal candle: high &lt; EMA and low &lt; EMA (entire candle below EMA). 4) Signal candle range (high \u2212 low) &lt; atr_filter_mult \u00d7 ATR(atr_period). Entry is a market order filled at the NEXT bar open.",
+  "sell_condition": "Position is exited in a scaling ladder: at each 2^n \u00d7 R level (2R, 4R, 8R, \u2026), close 50% of the remaining position and move the stop-loss up to that level. The trade fully closes when the stop is hit at any rung of the ladder or when equity/session rules require a flat book.",
+  "tp_sl_strategy": "Initial SL = open price of the signal candle. R = entry_price \u2212 SL. Ladder: (1) First target = entry + 2R \u2192 close 50% of position, move SL to entry + 2R, set next TP = entry + 4R. (2) Second target = entry + 4R \u2192 close 50% of remainder, move SL to entry + 4R, set next TP = entry + 8R. (3) Pattern continues doubling TP and moving SL to prior TP at each rung. Remainder is stopped out if price retraces to the current SL level.",
+  "risk_management": "Risk percent sizing: lots = (equity \u00d7 risk_pct / 100) / (|entry \u2212 SL| \u00d7 100). Leverage capped at max_leverage. Minimum lot step 0.01. Only one position open at a time; no new entry while a trade is active.",
+  "htf_timeframes": [],
+  "parameters": [
+    {
+      "name": "ema_period",
+      "type": "int",
+      "default": 33,
+      "min": 5,
+      "max": 200,
+      "help": "Period for the EMA used in the crossover condition."
+    },
+    {
+      "name": "atr_period",
+      "type": "int",
+      "default": 14,
+      "min": 5,
+      "max": 100,
+      "help": "Period for the ATR used in the candle-size filter."
+    },
+    {
+      "name": "atr_filter_mult",
+      "type": "float",
+      "default": 1.5,
+      "min": 0.5,
+      "max": 5.0,
+      "help": "Signal candle range must be less than this multiple of ATR to allow entry."
+    },
+    {
+      "name": "lookback_candles",
+      "type": "int",
+      "default": 3,
+      "min": 1,
+      "max": 10,
+      "help": "Number of candles before the signal candle that must have their entire range below the EMA."
+    },
+    {
+      "name": "risk_pct",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.1,
+      "max": 10.0,
+      "help": "Percentage of account equity risked per trade."
+    },
+    {
+      "name": "max_leverage",
+      "type": "float",
+      "default": 20.0,
+      "min": 1.0,
+      "max": 500.0,
+      "help": "Maximum leverage cap on notional position size."
+    },
+    {
+      "name": "ladder_start_r",
+      "type": "float",
+      "default": 2.0,
+      "min": 0.5,
+      "max": 10.0,
+      "help": "First take-profit level expressed as a multiple of R (subsequent levels double each time)."
+    },
+    {
+      "name": "ladder_close_fraction",
+      "type": "float",
+      "default": 0.5,
+      "min": 0.1,
+      "max": 0.9,
+      "help": "Fraction of the remaining position closed at each ladder TP level."
+    }
+  ],
+  "notes": "1) Entries are market orders at the next bar open after the signal bar; there will be slippage vs. the exact EMA cross price. 2) Because entry price differs from signal candle close, R is computed using actual fill price minus signal candle open (SL). 3) The doubling ladder means the final rung can never be fully closed by TP \u2014 the last remnant exits on the trailing stop. 4) Strategy is long-only; no short mirror is defined. 5) Only m1 data is used; no higher-timeframe filter."
+}

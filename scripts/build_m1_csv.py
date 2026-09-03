@@ -5,7 +5,7 @@ data/cache/dukascopy/*.parquet, so re-runs only download what's missing), then
 concatenates, dedupes and writes data/raw/XAUUSD_m1_1y.csv — same column format
 as the existing XAUUSD_m5_5y.csv.
 
-Usage: python -m scripts.build_m1_csv [start YYYY-MM-DD] [end YYYY-MM-DD]
+Usage: python -m scripts.build_m1_csv [start YYYY-MM-DD] [end YYYY-MM-DD] [out.csv]
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data_fetcher import fetch_ohlc  # noqa: E402
 
-OUT = Path("data/raw/XAUUSD_m1_1y.csv")
+DEFAULT_OUT = Path("data/raw/XAUUSD_m1_1y.csv")
 
 
 def month_starts(start: dt.datetime, end: dt.datetime):
@@ -35,6 +35,7 @@ def main() -> None:
         else dt.datetime.combine(dt.date.today(), dt.time())
     start = dt.datetime.strptime(sys.argv[1], "%Y-%m-%d") if len(sys.argv) > 1 \
         else end - dt.timedelta(days=365)
+    out = Path(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_OUT
 
     chunks = []
     for s, e in month_starts(start, end):
@@ -50,11 +51,11 @@ def main() -> None:
             .reset_index(drop=True))
     df = df[df["timestamp"] >= pd.Timestamp(start, tz="UTC")]
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(OUT, index=False)
-    print(f"wrote {OUT}: {len(df)} rows, "
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    print(f"wrote {out}: {len(df)} rows, "
           f"{df['timestamp'].iloc[0]} .. {df['timestamp'].iloc[-1]}, "
-          f"{OUT.stat().st_size / 1e6:.1f} MB", flush=True)
+          f"{out.stat().st_size / 1e6:.1f} MB", flush=True)
 
 
 if __name__ == "__main__":
